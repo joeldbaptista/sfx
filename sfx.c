@@ -19,58 +19,58 @@
 #include <time.h>
 #include <unistd.h>
 
-#define ESC      "\033"
-#define ESC_CUP  ESC "[%d;%dH"   /* cursor position (1-based) */
-#define ESC_EL   ESC "[K"         /* erase to end of line */
-#define ESC_ED   ESC "[2J"        /* erase display */
-#define ESC_HOME ESC "[H"         /* cursor to top-left */
-#define ESC_REV  ESC "[7m"        /* reverse video on */
-#define ESC_NRM  ESC "[m"         /* attributes off */
-#define ESC_HIDE ESC "[?25l"      /* hide cursor */
-#define ESC_SHOW ESC "[?25h"      /* show cursor */
+#define ESC "\033"
+#define ESC_CUP ESC "[%d;%dH" /* cursor position (1-based) */
+#define ESC_EL ESC "[K"       /* erase to end of line */
+#define ESC_ED ESC "[2J"      /* erase display */
+#define ESC_HOME ESC "[H"     /* cursor to top-left */
+#define ESC_REV ESC "[7m"     /* reverse video on */
+#define ESC_NRM ESC "[m"      /* attributes off */
+#define ESC_HIDE ESC "[?25l"  /* hide cursor */
+#define ESC_SHOW ESC "[?25h"  /* show cursor */
 
-#define MAXENT   4096
+#define MAXENT 4096
 #define MSGBUFSZ 512
 
 enum {
-	KEY_UP   = 256,
-	KEY_DOWN,
-	KEY_PGUP,
-	KEY_PGDN,
-	KEY_HOME,
-	KEY_END,
+  KEY_UP = 256,
+  KEY_DOWN,
+  KEY_PGUP,
+  KEY_PGDN,
+  KEY_HOME,
+  KEY_END,
 };
 
 typedef struct entry Entry;
 struct entry {
-	char name[NAME_MAX + 1];
-	struct stat st;
+  char name[NAME_MAX + 1];
+  struct stat st;
 };
 
 typedef struct state State;
 struct state {
-	int rows, cols;
-	struct termios orig;
-	Entry *ents;
-	int nent;
-	int sel;
-	int top;
-	char cwd[PATH_MAX];
-	char msg[MSGBUFSZ];
-	int have_msg;
+  int rows, cols;
+  struct termios orig;
+  Entry *ents;
+  int nent;
+  int sel;
+  int top;
+  char cwd[PATH_MAX];
+  char msg[MSGBUFSZ];
+  int have_msg;
 };
 
 /* prototypes */
 static void rawmode(void);
 static void cookmode(void);
 static void query_dims(void);
-static int  readkey(void);
+static int readkey(void);
 static void fmt_mode(mode_t m, char *buf);
 static void fmt_size(off_t sz, char *buf, size_t bufsz);
 static void fmt_time(time_t t, char *buf, size_t bufsz);
 static void fmt_entry(Entry *e, char *buf, size_t bufsz);
-static int  ent_cmp(const void *a, const void *b);
-static int  load_dir(const char *path);
+static int ent_cmp(const void *a, const void *b);
+static int load_dir(const char *path);
 static void nav_to(const char *path);
 static void cursor_at(int row, int col);
 static void draw_entry(int row, Entry *e, int selected);
@@ -87,688 +87,653 @@ static void handle_sigwinch(int sig);
 static State g;
 static volatile sig_atomic_t resize_pending;
 
-static void
-handle_sigwinch(int sig)
-{
-	(void)sig;
-	resize_pending = 1;
+static void handle_sigwinch(int sig) {
+  (void)sig;
+  resize_pending = 1;
 }
 
-static void
-handle_exit(int sig)
-{
-	(void)sig;
-	cleanup();
-	_exit(0);
+static void handle_exit(int sig) {
+  (void)sig;
+  cleanup();
+  _exit(0);
 }
 
-static void
-rawmode(void)
-{
-	static int saved;
-	struct termios t;
+static void rawmode(void) {
+  static int saved;
+  struct termios t;
 
-	if (!saved) {
-		tcgetattr(STDIN_FILENO, &g.orig);
-		saved = 1;
-	}
-	t = g.orig;
-	t.c_iflag &= ~(unsigned)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-	t.c_oflag &= ~(unsigned)OPOST;
-	t.c_cflag |= CS8;
-	t.c_lflag &= ~(unsigned)(ECHO | ICANON | IEXTEN | ISIG);
-	t.c_cc[VMIN]  = 1;
-	t.c_cc[VTIME] = 0;
-	tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
+  if (!saved) {
+    tcgetattr(STDIN_FILENO, &g.orig);
+    saved = 1;
+  }
+  t = g.orig;
+  t.c_iflag &= ~(unsigned)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+  t.c_oflag &= ~(unsigned)OPOST;
+  t.c_cflag |= CS8;
+  t.c_lflag &= ~(unsigned)(ECHO | ICANON | IEXTEN | ISIG);
+  t.c_cc[VMIN] = 1;
+  t.c_cc[VTIME] = 0;
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
 }
 
-static void
-cookmode(void)
-{
-	tcsetattr(STDIN_FILENO, TCSAFLUSH, &g.orig);
+static void cookmode(void) { tcsetattr(STDIN_FILENO, TCSAFLUSH, &g.orig); }
+
+static void query_dims(void) {
+  struct winsize ws;
+
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+    g.rows = (int)ws.ws_row;
+    g.cols = (int)ws.ws_col;
+  }
+  if (g.rows < 2)
+    g.rows = 24;
+  if (g.cols < 10)
+    g.cols = 80;
 }
 
-static void
-query_dims(void)
-{
-	struct winsize ws;
+static int readkey(void) {
+  unsigned char buf[8];
+  struct pollfd pfd;
+  ssize_t n;
 
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-		g.rows = (int)ws.ws_row;
-		g.cols = (int)ws.ws_col;
-	}
-	if (g.rows < 2)
-		g.rows = 24;
-	if (g.cols < 10)
-		g.cols = 80;
+  n = read(STDIN_FILENO, buf, 1);
+  if (n <= 0)
+    return -1;
+  if (buf[0] != 0x1b)
+    return (int)buf[0];
+
+  pfd.fd = STDIN_FILENO;
+  pfd.events = POLLIN;
+  if (poll(&pfd, 1, 50) <= 0)
+    return 0x1b;
+
+  n = read(STDIN_FILENO, buf + 1, sizeof(buf) - 1);
+  if (n <= 0)
+    return 0x1b;
+
+  if (buf[1] == '[' && n >= 2) {
+    switch (buf[2]) {
+    case 'A':
+      return KEY_UP;
+    case 'B':
+      return KEY_DOWN;
+    case 'H':
+      return KEY_HOME;
+    case 'F':
+      return KEY_END;
+    case '5':
+      if (n >= 4 && buf[3] == '~')
+        return KEY_PGUP;
+      break;
+    case '6':
+      if (n >= 4 && buf[3] == '~')
+        return KEY_PGDN;
+      break;
+    }
+  }
+  return 0x1b;
 }
 
-static int
-readkey(void)
-{
-	unsigned char buf[8];
-	struct pollfd pfd;
-	ssize_t n;
+static void fmt_mode(mode_t m, char *buf) {
+  char t;
 
-	n = read(STDIN_FILENO, buf, 1);
-	if (n <= 0)
-		return -1;
-	if (buf[0] != 0x1b)
-		return (int)buf[0];
+  if (S_ISDIR(m))
+    t = 'd';
+  else if (S_ISLNK(m))
+    t = 'l';
+  else if (S_ISBLK(m))
+    t = 'b';
+  else if (S_ISCHR(m))
+    t = 'c';
+  else if (S_ISFIFO(m))
+    t = 'p';
+  else if (S_ISSOCK(m))
+    t = 's';
+  else
+    t = '-';
 
-	pfd.fd     = STDIN_FILENO;
-	pfd.events = POLLIN;
-	if (poll(&pfd, 1, 50) <= 0)
-		return 0x1b;
-
-	n = read(STDIN_FILENO, buf + 1, sizeof(buf) - 1);
-	if (n <= 0)
-		return 0x1b;
-
-	if (buf[1] == '[' && n >= 2) {
-		switch (buf[2]) {
-		case 'A': return KEY_UP;
-		case 'B': return KEY_DOWN;
-		case 'H': return KEY_HOME;
-		case 'F': return KEY_END;
-		case '5':
-			if (n >= 4 && buf[3] == '~')
-				return KEY_PGUP;
-			break;
-		case '6':
-			if (n >= 4 && buf[3] == '~')
-				return KEY_PGDN;
-			break;
-		}
-	}
-	return 0x1b;
+  buf[0] = t;
+  buf[1] = (m & S_IRUSR) ? 'r' : '-';
+  buf[2] = (m & S_IWUSR) ? 'w' : '-';
+  buf[3] = ((m & S_ISUID) && (m & S_IXUSR)) ? 's'
+           : (m & S_ISUID)                  ? 'S'
+           : (m & S_IXUSR)                  ? 'x'
+                                            : '-';
+  buf[4] = (m & S_IRGRP) ? 'r' : '-';
+  buf[5] = (m & S_IWGRP) ? 'w' : '-';
+  buf[6] = ((m & S_ISGID) && (m & S_IXGRP)) ? 's'
+           : (m & S_ISGID)                  ? 'S'
+           : (m & S_IXGRP)                  ? 'x'
+                                            : '-';
+  buf[7] = (m & S_IROTH) ? 'r' : '-';
+  buf[8] = (m & S_IWOTH) ? 'w' : '-';
+  buf[9] = ((m & S_ISVTX) && (m & S_IXOTH)) ? 't'
+           : (m & S_ISVTX)                  ? 'T'
+           : (m & S_IXOTH)                  ? 'x'
+                                            : '-';
+  buf[10] = '\0';
 }
 
-static void
-fmt_mode(mode_t m, char *buf)
-{
-	char t;
-
-	if      (S_ISDIR(m))  t = 'd';
-	else if (S_ISLNK(m))  t = 'l';
-	else if (S_ISBLK(m))  t = 'b';
-	else if (S_ISCHR(m))  t = 'c';
-	else if (S_ISFIFO(m)) t = 'p';
-	else if (S_ISSOCK(m)) t = 's';
-	else                  t = '-';
-
-	buf[0]  = t;
-	buf[1]  = (m & S_IRUSR) ? 'r' : '-';
-	buf[2]  = (m & S_IWUSR) ? 'w' : '-';
-	buf[3]  = ((m & S_ISUID) && (m & S_IXUSR)) ? 's' :
-	           (m & S_ISUID)                    ? 'S' :
-	           (m & S_IXUSR)                    ? 'x' : '-';
-	buf[4]  = (m & S_IRGRP) ? 'r' : '-';
-	buf[5]  = (m & S_IWGRP) ? 'w' : '-';
-	buf[6]  = ((m & S_ISGID) && (m & S_IXGRP)) ? 's' :
-	           (m & S_ISGID)                    ? 'S' :
-	           (m & S_IXGRP)                    ? 'x' : '-';
-	buf[7]  = (m & S_IROTH) ? 'r' : '-';
-	buf[8]  = (m & S_IWOTH) ? 'w' : '-';
-	buf[9]  = ((m & S_ISVTX) && (m & S_IXOTH)) ? 't' :
-	           (m & S_ISVTX)                    ? 'T' :
-	           (m & S_IXOTH)                    ? 'x' : '-';
-	buf[10] = '\0';
+static void fmt_size(off_t sz, char *buf, size_t bufsz) {
+  if (sz >= (off_t)1 << 30)
+    snprintf(buf, bufsz, "%.1fG", (double)sz / ((off_t)1 << 30));
+  else if (sz >= (off_t)1 << 20)
+    snprintf(buf, bufsz, "%.1fM", (double)sz / ((off_t)1 << 20));
+  else if (sz >= (off_t)1 << 10)
+    snprintf(buf, bufsz, "%.1fK", (double)sz / ((off_t)1 << 10));
+  else
+    snprintf(buf, bufsz, "%lld", (long long)sz);
 }
 
-static void
-fmt_size(off_t sz, char *buf, size_t bufsz)
-{
-	if (sz >= (off_t)1 << 30)
-		snprintf(buf, bufsz, "%.1fG", (double)sz / ((off_t)1 << 30));
-	else if (sz >= (off_t)1 << 20)
-		snprintf(buf, bufsz, "%.1fM", (double)sz / ((off_t)1 << 20));
-	else if (sz >= (off_t)1 << 10)
-		snprintf(buf, bufsz, "%.1fK", (double)sz / ((off_t)1 << 10));
-	else
-		snprintf(buf, bufsz, "%lld", (long long)sz);
+static void fmt_time(time_t t, char *buf, size_t bufsz) {
+  struct tm *tm;
+  time_t now;
+
+  now = time(NULL);
+  tm = localtime(&t);
+  if (!tm) {
+    snprintf(buf, bufsz, "?");
+    return;
+  }
+  if (now - t > (time_t)6 * 30 * 24 * 3600 || t > now)
+    strftime(buf, bufsz, "%b %e  %Y", tm);
+  else
+    strftime(buf, bufsz, "%b %e %H:%M", tm);
 }
 
-static void
-fmt_time(time_t t, char *buf, size_t bufsz)
-{
-	struct tm *tm;
-	time_t now;
+static void fmt_entry(Entry *e, char *buf, size_t bufsz) {
+  char mode[12], sz[24], ts[20];
+  const char *user, *grp;
+  struct passwd *pw;
+  struct group *gr;
+  char ubuf[32], gbuf[32];
 
-	now = time(NULL);
-	tm = localtime(&t);
-	if (!tm) {
-		snprintf(buf, bufsz, "?");
-		return;
-	}
-	if (now - t > (time_t)6 * 30 * 24 * 3600 || t > now)
-		strftime(buf, bufsz, "%b %e  %Y", tm);
-	else
-		strftime(buf, bufsz, "%b %e %H:%M", tm);
+  fmt_mode(e->st.st_mode, mode);
+  fmt_size(e->st.st_size, sz, sizeof(sz));
+  fmt_time(e->st.st_mtime, ts, sizeof(ts));
+
+  pw = getpwuid(e->st.st_uid);
+  if (pw) {
+    user = pw->pw_name;
+  } else {
+    snprintf(ubuf, sizeof(ubuf), "%u", (unsigned)e->st.st_uid);
+    user = ubuf;
+  }
+
+  gr = getgrgid(e->st.st_gid);
+  if (gr) {
+    grp = gr->gr_name;
+  } else {
+    snprintf(gbuf, sizeof(gbuf), "%u", (unsigned)e->st.st_gid);
+    grp = gbuf;
+  }
+
+  snprintf(buf, bufsz, "%s %2lu %-8s %-8s %5s %s %s", mode,
+           (unsigned long)e->st.st_nlink, user, grp, sz, ts, e->name);
 }
 
-static void
-fmt_entry(Entry *e, char *buf, size_t bufsz)
-{
-	char mode[12], sz[24], ts[20];
-	const char *user, *grp;
-	struct passwd *pw;
-	struct group  *gr;
-	char ubuf[32], gbuf[32];
+static int ent_cmp(const void *a, const void *b) {
+  const Entry *ea = a, *eb = b;
 
-	fmt_mode(e->st.st_mode, mode);
-	fmt_size(e->st.st_size, sz, sizeof(sz));
-	fmt_time(e->st.st_mtime, ts, sizeof(ts));
-
-	pw = getpwuid(e->st.st_uid);
-	if (pw) {
-		user = pw->pw_name;
-	} else {
-		snprintf(ubuf, sizeof(ubuf), "%u", (unsigned)e->st.st_uid);
-		user = ubuf;
-	}
-
-	gr = getgrgid(e->st.st_gid);
-	if (gr) {
-		grp = gr->gr_name;
-	} else {
-		snprintf(gbuf, sizeof(gbuf), "%u", (unsigned)e->st.st_gid);
-		grp = gbuf;
-	}
-
-	snprintf(buf, bufsz, "%s %2lu %-8s %-8s %5s %s %s",
-	         mode, (unsigned long)e->st.st_nlink,
-	         user, grp, sz, ts, e->name);
+  if (strcmp(ea->name, ".") == 0)
+    return -1;
+  if (strcmp(eb->name, ".") == 0)
+    return 1;
+  if (strcmp(ea->name, "..") == 0)
+    return -1;
+  if (strcmp(eb->name, "..") == 0)
+    return 1;
+  return strcmp(ea->name, eb->name);
 }
 
-static int
-ent_cmp(const void *a, const void *b)
-{
-	const Entry *ea = a, *eb = b;
+static int load_dir(const char *path) {
+  DIR *d;
+  struct dirent *de;
+  Entry *e;
+  char full[PATH_MAX];
+  int n;
 
-	if (strcmp(ea->name, ".") == 0)  return -1;
-	if (strcmp(eb->name, ".") == 0)  return  1;
-	if (strcmp(ea->name, "..") == 0) return -1;
-	if (strcmp(eb->name, "..") == 0) return  1;
-	return strcmp(ea->name, eb->name);
+  d = opendir(path);
+  if (!d) {
+    snprintf(g.msg, sizeof(g.msg), "%s: %s", path, strerror(errno));
+    g.have_msg = 1;
+    return -1;
+  }
+
+  n = 0;
+  while ((de = readdir(d)) && n < MAXENT) {
+    e = &g.ents[n];
+    strncpy(e->name, de->d_name, NAME_MAX);
+    e->name[NAME_MAX] = '\0';
+    snprintf(full, sizeof(full), "%s/%s", path, de->d_name);
+    if (lstat(full, &e->st) < 0)
+      memset(&e->st, 0, sizeof(e->st));
+    n++;
+  }
+  closedir(d);
+
+  g.nent = n;
+  qsort(g.ents, g.nent, sizeof(*g.ents), ent_cmp);
+  return 0;
 }
 
-static int
-load_dir(const char *path)
-{
-	DIR *d;
-	struct dirent *de;
-	Entry *e;
-	char full[PATH_MAX];
-	int n;
+static void nav_to(const char *path) {
+  char resolved[PATH_MAX];
+  char prev[PATH_MAX];
+  const char *base;
+  char *r;
+  int i;
 
-	d = opendir(path);
-	if (!d) {
-		snprintf(g.msg, sizeof(g.msg), "%s: %s", path, strerror(errno));
-		g.have_msg = 1;
-		return -1;
-	}
+  strncpy(prev, g.cwd, PATH_MAX - 1);
+  prev[PATH_MAX - 1] = '\0';
 
-	n = 0;
-	while ((de = readdir(d)) && n < MAXENT) {
-		e = &g.ents[n];
-		strncpy(e->name, de->d_name, NAME_MAX);
-		e->name[NAME_MAX] = '\0';
-		snprintf(full, sizeof(full), "%s/%s", path, de->d_name);
-		if (lstat(full, &e->st) < 0)
-			memset(&e->st, 0, sizeof(e->st));
-		n++;
-	}
-	closedir(d);
+  r = realpath(path, resolved);
+  if (!r) {
+    snprintf(g.msg, sizeof(g.msg), "%s: %s", path, strerror(errno));
+    g.have_msg = 1;
+    return;
+  }
+  if (load_dir(resolved) < 0)
+    return;
+  if (chdir(resolved) < 0) {
+    snprintf(g.msg, sizeof(g.msg), "chdir: %s", strerror(errno));
+    g.have_msg = 1;
+    return;
+  }
 
-	g.nent = n;
-	qsort(g.ents, g.nent, sizeof(*g.ents), ent_cmp);
-	return 0;
+  strncpy(g.cwd, resolved, PATH_MAX - 1);
+  g.cwd[PATH_MAX - 1] = '\0';
+  g.sel = 0;
+  g.top = 0;
+  g.have_msg = 0;
+
+  /* navigating up: position cursor on the dir we came from */
+  if (prev[0] && strlen(g.cwd) < strlen(prev)) {
+    base = strrchr(prev, '/');
+    if (base) {
+      base++;
+      for (i = 0; i < g.nent; i++) {
+        if (strcmp(g.ents[i].name, base) == 0) {
+          g.sel = i;
+          break;
+        }
+      }
+    }
+  }
 }
 
-static void
-nav_to(const char *path)
-{
-	char resolved[PATH_MAX];
-	char prev[PATH_MAX];
-	const char *base;
-	char *r;
-	int i;
+static void cursor_at(int row, int col) { printf(ESC_CUP, row, col); }
 
-	strncpy(prev, g.cwd, PATH_MAX - 1);
-	prev[PATH_MAX - 1] = '\0';
+static void draw_entry(int row, Entry *e, int selected) {
+  char buf[512];
 
-	r = realpath(path, resolved);
-	if (!r) {
-		snprintf(g.msg, sizeof(g.msg), "%s: %s", path, strerror(errno));
-		g.have_msg = 1;
-		return;
-	}
-	if (load_dir(resolved) < 0)
-		return;
-	if (chdir(resolved) < 0) {
-		snprintf(g.msg, sizeof(g.msg), "chdir: %s", strerror(errno));
-		g.have_msg = 1;
-		return;
-	}
+  fmt_entry(e, buf, sizeof(buf));
+  if ((int)strlen(buf) > g.cols)
+    buf[g.cols] = '\0';
 
-	strncpy(g.cwd, resolved, PATH_MAX - 1);
-	g.cwd[PATH_MAX - 1] = '\0';
-	g.sel      = 0;
-	g.top      = 0;
-	g.have_msg = 0;
-
-	/* navigating up: position cursor on the dir we came from */
-	if (prev[0] && strlen(g.cwd) < strlen(prev)) {
-		base = strrchr(prev, '/');
-		if (base) {
-			base++;
-			for (i = 0; i < g.nent; i++) {
-				if (strcmp(g.ents[i].name, base) == 0) {
-					g.sel = i;
-					break;
-				}
-			}
-		}
-	}
+  cursor_at(row, 1);
+  if (selected)
+    fputs(ESC_REV, stdout);
+  fputs(buf, stdout);
+  fputs(ESC_EL, stdout);
+  if (selected)
+    fputs(ESC_NRM, stdout);
 }
 
-static void
-cursor_at(int row, int col)
-{
-	printf(ESC_CUP, row, col);
+static void draw_status(void) {
+  const char *text;
+  int len;
+
+  cursor_at(g.rows, 1);
+  text = g.have_msg ? g.msg : g.cwd;
+  len = (int)strlen(text);
+  if (len > g.cols)
+    text += len - g.cols;
+  fputs(text, stdout);
+  fputs(ESC_EL, stdout);
 }
 
-static void
-draw_entry(int row, Entry *e, int selected)
-{
-	char buf[512];
+static void draw(void) {
+  int i, row, visible;
 
-	fmt_entry(e, buf, sizeof(buf));
-	if ((int)strlen(buf) > g.cols)
-		buf[g.cols] = '\0';
+  visible = g.rows - 1;
+  if (visible < 1)
+    visible = 1;
 
-	cursor_at(row, 1);
-	if (selected)
-		fputs(ESC_REV, stdout);
-	fputs(buf, stdout);
-	fputs(ESC_EL, stdout);
-	if (selected)
-		fputs(ESC_NRM, stdout);
+  if (g.sel < g.top)
+    g.top = g.sel;
+  if (g.sel >= g.top + visible)
+    g.top = g.sel - visible + 1;
+  if (g.top < 0)
+    g.top = 0;
+
+  fputs(ESC_HIDE, stdout);
+  for (i = g.top, row = 1; i < g.nent && row <= visible; i++, row++)
+    draw_entry(row, &g.ents[i], i == g.sel);
+  for (; row <= visible; row++) {
+    cursor_at(row, 1);
+    fputs(ESC_EL, stdout);
+  }
+  draw_status();
+  fflush(stdout);
+  fputs(ESC_SHOW, stdout);
+  fflush(stdout);
 }
 
-static void
-draw_status(void)
-{
-	const char *text;
-	int len;
+static void open_entry(void) {
+  Entry *e;
+  char path[PATH_MAX];
+  char *args[3];
+  pid_t pid;
+  int st;
 
-	cursor_at(g.rows, 1);
-	text = g.have_msg ? g.msg : g.cwd;
-	len  = (int)strlen(text);
-	if (len > g.cols)
-		text += len - g.cols;
-	fputs(text, stdout);
-	fputs(ESC_EL, stdout);
+  if (g.nent == 0)
+    return;
+  e = &g.ents[g.sel];
+
+  if (S_ISDIR(e->st.st_mode)) {
+    snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
+    nav_to(path);
+    return;
+  }
+
+  if (!S_ISREG(e->st.st_mode))
+    return;
+
+  snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
+  cookmode();
+  fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
+  fflush(stdout);
+
+  signal(SIGINT, SIG_IGN);
+  pid = fork();
+  if (pid < 0) {
+    rawmode();
+    signal(SIGINT, handle_exit);
+    snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
+    g.have_msg = 1;
+    return;
+  }
+  if (pid == 0) {
+    signal(SIGINT, SIG_DFL);
+    args[0] = EDITOR;
+    args[1] = path;
+    args[2] = NULL;
+    execvp(EDITOR, args);
+    _exit(127);
+  }
+  waitpid(pid, &st, 0);
+  signal(SIGINT, handle_exit);
+  rawmode();
+  query_dims();
+  g.have_msg = 0;
 }
 
-static void
-draw(void)
-{
-	int i, row, visible;
+static void spawn_shell(void) {
+  char *args[2];
+  pid_t pid;
+  int st;
 
-	visible = g.rows - 1;
-	if (visible < 1)
-		visible = 1;
+  cookmode();
+  fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
+  fflush(stdout);
 
-	if (g.sel < g.top)
-		g.top = g.sel;
-	if (g.sel >= g.top + visible)
-		g.top = g.sel - visible + 1;
-	if (g.top < 0)
-		g.top = 0;
-
-	fputs(ESC_HIDE, stdout);
-	for (i = g.top, row = 1; i < g.nent && row <= visible; i++, row++)
-		draw_entry(row, &g.ents[i], i == g.sel);
-	for (; row <= visible; row++) {
-		cursor_at(row, 1);
-		fputs(ESC_EL, stdout);
-	}
-	draw_status();
-	fflush(stdout);
-	fputs(ESC_SHOW, stdout);
-	fflush(stdout);
+  signal(SIGINT, SIG_IGN);
+  pid = fork();
+  if (pid < 0) {
+    rawmode();
+    signal(SIGINT, handle_exit);
+    snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
+    g.have_msg = 1;
+    return;
+  }
+  if (pid == 0) {
+    signal(SIGINT, SIG_DFL);
+    args[0] = SHELL;
+    args[1] = NULL;
+    execvp(SHELL, args);
+    _exit(127);
+  }
+  waitpid(pid, &st, 0);
+  signal(SIGINT, handle_exit);
+  rawmode();
+  query_dims();
+  load_dir(g.cwd);
+  if (g.sel >= g.nent)
+    g.sel = g.nent > 0 ? g.nent - 1 : 0;
+  g.have_msg = 0;
 }
 
-static void
-open_entry(void)
-{
-	Entry *e;
-	char path[PATH_MAX];
-	char *args[3];
-	pid_t pid;
-	int st;
+static void run_shell_cmd(const char *cmd) {
+  char *args[5];
+  char dummy[1];
+  pid_t pid;
+  int st;
 
-	if (g.nent == 0)
-		return;
-	e = &g.ents[g.sel];
+  cookmode();
+  fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
+  fflush(stdout);
 
-	if (S_ISDIR(e->st.st_mode)) {
-		snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
-		nav_to(path);
-		return;
-	}
-
-	if (!S_ISREG(e->st.st_mode))
-		return;
-
-	snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
-	cookmode();
-	fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
-	fflush(stdout);
-
-	signal(SIGINT, SIG_IGN);
-	pid = fork();
-	if (pid < 0) {
-		rawmode();
-		signal(SIGINT, handle_exit);
-		snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
-		g.have_msg = 1;
-		return;
-	}
-	if (pid == 0) {
-		signal(SIGINT, SIG_DFL);
-		args[0] = EDITOR;
-		args[1] = path;
-		args[2] = NULL;
-		execvp(EDITOR, args);
-		_exit(127);
-	}
-	waitpid(pid, &st, 0);
-	signal(SIGINT, handle_exit);
-	rawmode();
-	query_dims();
-	g.have_msg = 0;
+  signal(SIGINT, SIG_IGN);
+  pid = fork();
+  if (pid < 0) {
+    rawmode();
+    signal(SIGINT, handle_exit);
+    snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
+    g.have_msg = 1;
+    return;
+  }
+  if (pid == 0) {
+    signal(SIGINT, SIG_DFL);
+    args[0] = SHELL;
+    args[1] = "-i"; /* interactive: sources rc file, expands aliases */
+    args[2] = "-c";
+    args[3] = (char *)cmd;
+    args[4] = NULL;
+    execvp(SHELL, args);
+    _exit(127);
+  }
+  waitpid(pid, &st, 0);
+  signal(SIGINT, handle_exit);
+  fputs("\n[Press any key to continue]", stdout);
+  fflush(stdout);
+  rawmode();
+  read(STDIN_FILENO, dummy, 1);
+  load_dir(g.cwd);
+  if (g.sel >= g.nent)
+    g.sel = g.nent > 0 ? g.nent - 1 : 0;
+  g.have_msg = 0;
 }
 
-static void
-spawn_shell(void)
-{
-	char *args[2];
-	pid_t pid;
-	int st;
+static void read_cmd(void) {
+  char cmd[512];
+  int len, c;
 
-	cookmode();
-	fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
-	fflush(stdout);
+  cursor_at(g.rows, 1);
+  fputs(ESC_NRM ESC_EL ":", stdout);
+  fflush(stdout);
 
-	signal(SIGINT, SIG_IGN);
-	pid = fork();
-	if (pid < 0) {
-		rawmode();
-		signal(SIGINT, handle_exit);
-		snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
-		g.have_msg = 1;
-		return;
-	}
-	if (pid == 0) {
-		signal(SIGINT, SIG_DFL);
-		args[0] = SHELL;
-		args[1] = NULL;
-		execvp(SHELL, args);
-		_exit(127);
-	}
-	waitpid(pid, &st, 0);
-	signal(SIGINT, handle_exit);
-	rawmode();
-	query_dims();
-	load_dir(g.cwd);
-	if (g.sel >= g.nent)
-		g.sel = g.nent > 0 ? g.nent - 1 : 0;
-	g.have_msg = 0;
+  len = 0;
+  for (;;) {
+    c = readkey();
+    if (c == '\r' || c == '\n')
+      break;
+    if (c == 0x1b || c < 0)
+      return;
+    if ((c == 0x7f || c == '\b') && len > 0) {
+      len--;
+      fputs("\b \b", stdout);
+      fflush(stdout);
+      continue;
+    }
+    if (c >= ' ' && c < 0x7f && len < (int)sizeof(cmd) - 1) {
+      cmd[len++] = (char)c;
+      putchar(c);
+      fflush(stdout);
+    }
+  }
+  cmd[len] = '\0';
+  if (len == 0)
+    return;
+  if (strcmp(cmd, "sh") == 0)
+    spawn_shell();
+  else
+    run_shell_cmd(cmd);
 }
 
-static void
-run_shell_cmd(const char *cmd)
-{
-	char *args[5];
-	char dummy[1];
-	pid_t pid;
-	int st;
-
-	cookmode();
-	fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
-	fflush(stdout);
-
-	signal(SIGINT, SIG_IGN);
-	pid = fork();
-	if (pid < 0) {
-		rawmode();
-		signal(SIGINT, handle_exit);
-		snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
-		g.have_msg = 1;
-		return;
-	}
-	if (pid == 0) {
-		signal(SIGINT, SIG_DFL);
-		args[0] = SHELL;
-		args[1] = "-i";   /* interactive: sources rc file, expands aliases */
-		args[2] = "-c";
-		args[3] = (char *)cmd;
-		args[4] = NULL;
-		execvp(SHELL, args);
-		_exit(127);
-	}
-	waitpid(pid, &st, 0);
-	signal(SIGINT, handle_exit);
-	fputs("\n[Press any key to continue]", stdout);
-	fflush(stdout);
-	rawmode();
-	read(STDIN_FILENO, dummy, 1);
-	load_dir(g.cwd);
-	if (g.sel >= g.nent)
-		g.sel = g.nent > 0 ? g.nent - 1 : 0;
-	g.have_msg = 0;
+static void cleanup(void) {
+  cookmode();
+  fputs(ESC_NRM ESC_ED ESC_HOME ESC_SHOW, stdout);
+  fflush(stdout);
 }
 
-static void
-read_cmd(void)
-{
-	char cmd[512];
-	int len, c;
+int main(int argc, char *argv[]) {
+  const char *start;
+  int c, half, full;
 
-	cursor_at(g.rows, 1);
-	fputs(ESC_NRM ESC_EL ":", stdout);
-	fflush(stdout);
+  if (argc > 2) {
+    fprintf(stderr, "usage: sfx [directory]\n");
+    return 1;
+  }
+  start = argc == 2 ? argv[1] : ".";
 
-	len = 0;
-	for (;;) {
-		c = readkey();
-		if (c == '\r' || c == '\n')
-			break;
-		if (c == 0x1b || c < 0)
-			return;
-		if ((c == 0x7f || c == '\b') && len > 0) {
-			len--;
-			fputs("\b \b", stdout);
-			fflush(stdout);
-			continue;
-		}
-		if (c >= ' ' && c < 0x7f && len < (int)sizeof(cmd) - 1) {
-			cmd[len++] = (char)c;
-			putchar(c);
-			fflush(stdout);
-		}
-	}
-	cmd[len] = '\0';
-	if (len == 0)
-		return;
-	if (strcmp(cmd, "sh") == 0)
-		spawn_shell();
-	else
-		run_shell_cmd(cmd);
-}
+  g.ents = malloc(MAXENT * sizeof(*g.ents));
+  if (!g.ents) {
+    fprintf(stderr, "sfx: out of memory\n");
+    return 1;
+  }
 
-static void
-cleanup(void)
-{
-	cookmode();
-	fputs(ESC_NRM ESC_ED ESC_HOME ESC_SHOW, stdout);
-	fflush(stdout);
-}
+  signal(SIGWINCH, handle_sigwinch);
+  signal(SIGTERM, handle_exit);
+  signal(SIGINT, handle_exit);
+  signal(SIGPIPE, SIG_IGN);
 
-int
-main(int argc, char *argv[])
-{
-	const char *start;
-	int c, half, full;
+  rawmode();
+  query_dims();
+  nav_to(start);
+  draw();
 
-	if (argc > 2) {
-		fprintf(stderr, "usage: sfx [directory]\n");
-		return 1;
-	}
-	start = argc == 2 ? argv[1] : ".";
+  for (;;) {
+    if (resize_pending) {
+      resize_pending = 0;
+      query_dims();
+      draw();
+    }
 
-	g.ents = malloc(MAXENT * sizeof(*g.ents));
-	if (!g.ents) {
-		fprintf(stderr, "sfx: out of memory\n");
-		return 1;
-	}
+    c = readkey();
+    half = (g.rows - 1) / 2;
+    full = g.rows - 1;
 
-	signal(SIGWINCH, handle_sigwinch);
-	signal(SIGTERM, handle_exit);
-	signal(SIGINT, handle_exit);
-	signal(SIGPIPE, SIG_IGN);
+    switch (c) {
+    case 3: /* Ctrl-C */ /* FALLTHROUGH */
+    case 'q':            /* FALLTHROUGH */
+    case 'Q':
+      cleanup();
+      free(g.ents);
+      return 0;
 
-	rawmode();
-	query_dims();
-	nav_to(start);
-	draw();
+    case 'j': /* FALLTHROUGH */
+    case KEY_DOWN:
+      if (g.sel < g.nent - 1) {
+        g.sel++;
+        g.have_msg = 0;
+        draw();
+      }
+      break;
 
-	for (;;) {
-		if (resize_pending) {
-			resize_pending = 0;
-			query_dims();
-			draw();
-		}
+    case 'k': /* FALLTHROUGH */
+    case KEY_UP:
+      if (g.sel > 0) {
+        g.sel--;
+        g.have_msg = 0;
+        draw();
+      }
+      break;
 
-		c    = readkey();
-		half = (g.rows - 1) / 2;
-		full = g.rows - 1;
+    case '\r': /* FALLTHROUGH */
+    case '\n': /* FALLTHROUGH */
+    case 'l':
+      open_entry();
+      draw();
+      break;
 
-		switch (c) {
-		case 3:   /* Ctrl-C */ /* FALLTHROUGH */
-		case 'q': /* FALLTHROUGH */
-		case 'Q':
-			cleanup();
-			free(g.ents);
-			return 0;
+    case 0x7f: /* Backspace */ /* FALLTHROUGH */
+    case 'h': {
+      char par[PATH_MAX];
+      char *p;
 
-		case 'j': /* FALLTHROUGH */
-		case KEY_DOWN:
-			if (g.sel < g.nent - 1) {
-				g.sel++;
-				g.have_msg = 0;
-				draw();
-			}
-			break;
+      strncpy(par, g.cwd, sizeof(par) - 1);
+      par[sizeof(par) - 1] = '\0';
+      p = strrchr(par, '/');
+      if (p == par)
+        p[1] = '\0'; /* root: keep "/" */
+      else if (p)
+        p[0] = '\0';
+      nav_to(par);
+      draw();
+    } break;
 
-		case 'k': /* FALLTHROUGH */
-		case KEY_UP:
-			if (g.sel > 0) {
-				g.sel--;
-				g.have_msg = 0;
-				draw();
-			}
-			break;
+    case 'g': /* FALLTHROUGH */
+    case KEY_HOME:
+      g.sel = 0;
+      g.top = 0;
+      g.have_msg = 0;
+      draw();
+      break;
 
-		case '\r': /* FALLTHROUGH */
-		case '\n': /* FALLTHROUGH */
-		case 'l':
-			open_entry();
-			draw();
-			break;
+    case 'G': /* FALLTHROUGH */
+    case KEY_END:
+      g.sel = g.nent > 0 ? g.nent - 1 : 0;
+      g.have_msg = 0;
+      draw();
+      break;
 
-		case 0x7f: /* Backspace */ /* FALLTHROUGH */
-		case 'h':
-			{
-				char par[PATH_MAX];
-				char *p;
+    case 4: /* Ctrl-D */
+      g.sel += half;
+      if (g.sel >= g.nent)
+        g.sel = g.nent > 0 ? g.nent - 1 : 0;
+      g.have_msg = 0;
+      draw();
+      break;
 
-				strncpy(par, g.cwd, sizeof(par) - 1);
-				par[sizeof(par) - 1] = '\0';
-				p = strrchr(par, '/');
-				if (p == par)
-					p[1] = '\0'; /* root: keep "/" */
-				else if (p)
-					p[0] = '\0';
-				nav_to(par);
-				draw();
-			}
-			break;
+    case 21: /* Ctrl-U */
+      g.sel -= half;
+      if (g.sel < 0)
+        g.sel = 0;
+      g.have_msg = 0;
+      draw();
+      break;
 
-		case 'g': /* FALLTHROUGH */
-		case KEY_HOME:
-			g.sel      = 0;
-			g.top      = 0;
-			g.have_msg = 0;
-			draw();
-			break;
+    case 6: /* Ctrl-F */ /* FALLTHROUGH */
+    case KEY_PGDN:
+      g.sel += full;
+      if (g.sel >= g.nent)
+        g.sel = g.nent > 0 ? g.nent - 1 : 0;
+      g.have_msg = 0;
+      draw();
+      break;
 
-		case 'G': /* FALLTHROUGH */
-		case KEY_END:
-			g.sel      = g.nent > 0 ? g.nent - 1 : 0;
-			g.have_msg = 0;
-			draw();
-			break;
+    case 2: /* Ctrl-B */ /* FALLTHROUGH */
+    case KEY_PGUP:
+      g.sel -= full;
+      if (g.sel < 0)
+        g.sel = 0;
+      g.have_msg = 0;
+      draw();
+      break;
 
-		case 4: /* Ctrl-D */
-			g.sel += half;
-			if (g.sel >= g.nent)
-				g.sel = g.nent > 0 ? g.nent - 1 : 0;
-			g.have_msg = 0;
-			draw();
-			break;
+    case 12: /* Ctrl-L */
+      query_dims();
+      draw();
+      break;
 
-		case 21: /* Ctrl-U */
-			g.sel -= half;
-			if (g.sel < 0)
-				g.sel = 0;
-			g.have_msg = 0;
-			draw();
-			break;
+    case ':':
+      read_cmd();
+      draw();
+      break;
 
-		case 6:    /* Ctrl-F */ /* FALLTHROUGH */
-		case KEY_PGDN:
-			g.sel += full;
-			if (g.sel >= g.nent)
-				g.sel = g.nent > 0 ? g.nent - 1 : 0;
-			g.have_msg = 0;
-			draw();
-			break;
-
-		case 2:    /* Ctrl-B */ /* FALLTHROUGH */
-		case KEY_PGUP:
-			g.sel -= full;
-			if (g.sel < 0)
-				g.sel = 0;
-			g.have_msg = 0;
-			draw();
-			break;
-
-		case 12: /* Ctrl-L */
-			query_dims();
-			draw();
-			break;
-
-		case ':':
-			read_cmd();
-			draw();
-			break;
-
-		default:
-			break;
-		}
-	}
+    default:
+      break;
+    }
+  }
 }
