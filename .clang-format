@@ -5,3 +5,4 @@ TabWidth: 8
 UseTab: Always
 ColumnLimit: 80
 BreakBeforeBraces: Linux
+BreakAfterReturnType: AllDefinitions
