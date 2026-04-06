@@ -87,20 +87,23 @@ static void handle_sigwinch(int sig);
 static State g;
 static volatile sig_atomic_t resize_pending;
 
-static void handle_sigwinch(int sig)
+static void
+handle_sigwinch(int sig)
 {
 	(void)sig;
 	resize_pending = 1;
 }
 
-static void handle_exit(int sig)
+static void
+handle_exit(int sig)
 {
 	(void)sig;
 	cleanup();
 	_exit(0);
 }
 
-static void rawmode(void)
+static void
+rawmode(void)
 {
 	static int saved;
 	struct termios t;
@@ -119,9 +122,14 @@ static void rawmode(void)
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
 }
 
-static void cookmode(void) { tcsetattr(STDIN_FILENO, TCSAFLUSH, &g.orig); }
+static void
+cookmode(void)
+{
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &g.orig);
+}
 
-static void query_dims(void)
+static void
+query_dims(void)
 {
 	struct winsize ws;
 
@@ -135,7 +143,8 @@ static void query_dims(void)
 		g.cols = 80;
 }
 
-static int readkey(void)
+static int
+readkey(void)
 {
 	unsigned char buf[8];
 	struct pollfd pfd;
@@ -179,7 +188,8 @@ static int readkey(void)
 	return 0x1b;
 }
 
-static void fmt_mode(mode_t m, char *buf)
+static void
+fmt_mode(mode_t m, char *buf)
 {
 	char t;
 
@@ -220,7 +230,8 @@ static void fmt_mode(mode_t m, char *buf)
 	buf[10] = '\0';
 }
 
-static void fmt_size(off_t sz, char *buf, size_t bufsz)
+static void
+fmt_size(off_t sz, char *buf, size_t bufsz)
 {
 	if (sz >= (off_t)1 << 30)
 		snprintf(buf, bufsz, "%.1fG", (double)sz / ((off_t)1 << 30));
@@ -232,7 +243,8 @@ static void fmt_size(off_t sz, char *buf, size_t bufsz)
 		snprintf(buf, bufsz, "%lld", (long long)sz);
 }
 
-static void fmt_time(time_t t, char *buf, size_t bufsz)
+static void
+fmt_time(time_t t, char *buf, size_t bufsz)
 {
 	struct tm *tm;
 	time_t now;
@@ -249,7 +261,8 @@ static void fmt_time(time_t t, char *buf, size_t bufsz)
 		strftime(buf, bufsz, "%b %e %H:%M", tm);
 }
 
-static void fmt_entry(Entry *e, char *buf, size_t bufsz)
+static void
+fmt_entry(Entry *e, char *buf, size_t bufsz)
 {
 	char mode[12], sz[24], ts[20];
 	const char *user, *grp;
@@ -281,7 +294,8 @@ static void fmt_entry(Entry *e, char *buf, size_t bufsz)
 		 (unsigned long)e->st.st_nlink, user, grp, sz, ts, e->name);
 }
 
-static int ent_cmp(const void *a, const void *b)
+static int
+ent_cmp(const void *a, const void *b)
 {
 	const Entry *ea = a, *eb = b;
 
@@ -296,7 +310,8 @@ static int ent_cmp(const void *a, const void *b)
 	return strcmp(ea->name, eb->name);
 }
 
-static int load_dir(const char *path)
+static int
+load_dir(const char *path)
 {
 	DIR *d;
 	struct dirent *de;
@@ -328,7 +343,8 @@ static int load_dir(const char *path)
 	return 0;
 }
 
-static void nav_to(const char *path)
+static void
+nav_to(const char *path)
 {
 	char resolved[PATH_MAX];
 	char prev[PATH_MAX];
@@ -374,9 +390,14 @@ static void nav_to(const char *path)
 	}
 }
 
-static void cursor_at(int row, int col) { printf(ESC_CUP, row, col); }
+static void
+cursor_at(int row, int col)
+{
+	printf(ESC_CUP, row, col);
+}
 
-static void draw_entry(int row, Entry *e, int selected)
+static void
+draw_entry(int row, Entry *e, int selected)
 {
 	char buf[512];
 
@@ -393,7 +414,8 @@ static void draw_entry(int row, Entry *e, int selected)
 		fputs(ESC_NRM, stdout);
 }
 
-static void draw_status(void)
+static void
+draw_status(void)
 {
 	const char *text;
 	int len;
@@ -407,7 +429,8 @@ static void draw_status(void)
 	fputs(ESC_EL, stdout);
 }
 
-static void draw(void)
+static void
+draw(void)
 {
 	int i, row, visible;
 
@@ -435,7 +458,8 @@ static void draw(void)
 	fflush(stdout);
 }
 
-static void open_entry(void)
+static void
+open_entry(void)
 {
 	Entry *e;
 	char path[PATH_MAX];
@@ -485,7 +509,8 @@ static void open_entry(void)
 	g.have_msg = 0;
 }
 
-static void spawn_shell(void)
+static void
+spawn_shell(void)
 {
 	char *args[2];
 	pid_t pid;
@@ -521,7 +546,8 @@ static void spawn_shell(void)
 	g.have_msg = 0;
 }
 
-static void run_shell_cmd(const char *cmd)
+static void
+run_shell_cmd(const char *cmd)
 {
 	char *args[5];
 	char dummy[1];
@@ -564,7 +590,8 @@ static void run_shell_cmd(const char *cmd)
 	g.have_msg = 0;
 }
 
-static void read_cmd(void)
+static void
+read_cmd(void)
 {
 	char cmd[512];
 	int len, c;
@@ -601,14 +628,16 @@ static void read_cmd(void)
 		run_shell_cmd(cmd);
 }
 
-static void cleanup(void)
+static void
+cleanup(void)
 {
 	cookmode();
 	fputs(ESC_NRM ESC_ED ESC_HOME ESC_SHOW, stdout);
 	fflush(stdout);
 }
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
 	const char *start;
 	int c, half, full;
