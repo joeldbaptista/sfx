@@ -26,6 +26,7 @@
 #define ESC_HOME ESC "[H"     /* cursor to top-left */
 #define ESC_REV ESC "[7m"     /* reverse video on */
 #define ESC_NRM ESC "[m"      /* attributes off */
+#define ESC_BOLD ESC "[1m"    /* bold on */
 #define ESC_HIDE ESC "[?25l"  /* hide cursor */
 #define ESC_SHOW ESC "[?25h"  /* show cursor */
 
@@ -408,9 +409,11 @@ draw_entry(int row, Entry *e, int selected)
 	cursor_at(row, 1);
 	if (selected)
 		fputs(ESC_REV, stdout);
+	if (S_ISDIR(e->st.st_mode))
+		fputs(ESC_BOLD, stdout);
 	fputs(buf, stdout);
 	fputs(ESC_EL, stdout);
-	if (selected)
+	if (S_ISDIR(e->st.st_mode) || selected)
 		fputs(ESC_NRM, stdout);
 }
 
