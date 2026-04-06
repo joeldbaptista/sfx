@@ -7,5 +7,8 @@ sfx: sfx.c config.h
 install: sfx
 	cp sfx /usr/local/bin/sfx
 
+frmt:
+	clang-format -i *.c *.h
+
 clean:
 	rm -f sfx
