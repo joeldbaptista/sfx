@@ -59,6 +59,8 @@ struct state {
 	char cwd[PATH_MAX];
 	char msg[MSGBUFSZ];
 	int have_msg;
+	char search[NAME_MAX + 1];
+	int have_search;
 };
 
 /* prototypes */
@@ -81,6 +83,8 @@ static void open_entry(void);
 static void spawn_shell(void);
 static void run_shell_cmd(const char *cmd);
 static void read_cmd(void);
+static void read_search(void);
+static void search_jump(int dir);
 static void cleanup(void);
 static void handle_exit(int sig);
 static void handle_sigwinch(int sig);
@@ -469,21 +473,27 @@ open_entry(void)
 	char *args[3];
 	pid_t pid;
 	int st;
+	struct stat follow;
+	mode_t mode;
 
 	if (g.nent == 0)
 		return;
 	e = &g.ents[g.sel];
+	mode = e->st.st_mode;
 
-	if (S_ISDIR(e->st.st_mode)) {
-		snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
+	snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
+
+	/* follow symlinks to determine target type */
+	if (S_ISLNK(mode) && stat(path, &follow) == 0)
+		mode = follow.st_mode;
+
+	if (S_ISDIR(mode)) {
 		nav_to(path);
 		return;
 	}
 
-	if (!S_ISREG(e->st.st_mode))
+	if (!S_ISREG(mode))
 		return;
-
-	snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
 	cookmode();
 	fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
 	fflush(stdout);
@@ -591,6 +601,61 @@ run_shell_cmd(const char *cmd)
 	if (g.sel >= g.nent)
 		g.sel = g.nent > 0 ? g.nent - 1 : 0;
 	g.have_msg = 0;
+}
+
+static void
+search_jump(int dir)
+{
+	int i, count;
+
+	if (!g.have_search || g.search[0] == '\0' || g.nent == 0)
+		return;
+	i = (g.sel + dir + g.nent) % g.nent;
+	for (count = 0; count < g.nent; count++) {
+		if (strstr(g.ents[i].name, g.search)) {
+			g.sel = i;
+			g.have_msg = 0;
+			return;
+		}
+		i = (i + dir + g.nent) % g.nent;
+	}
+	snprintf(g.msg, sizeof(g.msg), "no match: %s", g.search);
+	g.have_msg = 1;
+}
+
+static void
+read_search(void)
+{
+	int len, c;
+
+	cursor_at(g.rows, 1);
+	fputs(ESC_NRM ESC_EL "/", stdout);
+	fflush(stdout);
+
+	len = 0;
+	for (;;) {
+		c = readkey();
+		if (c == '\r' || c == '\n')
+			break;
+		if (c == 0x1b || c < 0)
+			return;
+		if ((c == 0x7f || c == '\b') && len > 0) {
+			len--;
+			fputs("\b \b", stdout);
+			fflush(stdout);
+			continue;
+		}
+		if (c >= ' ' && c < 0x7f && len < NAME_MAX) {
+			g.search[len++] = (char)c;
+			putchar(c);
+			fflush(stdout);
+		}
+	}
+	g.search[len] = '\0';
+	if (len == 0)
+		return;
+	g.have_search = 1;
+	search_jump(1);
 }
 
 static void
@@ -783,6 +848,21 @@ main(int argc, char *argv[])
 
 		case ':':
 			read_cmd();
+			draw();
+			break;
+
+		case '/':
+			read_search();
+			draw();
+			break;
+
+		case 'n':
+			search_jump(1);
+			draw();
+			break;
+
+		case 'N':
+			search_jump(-1);
 			draw();
 			break;
 
