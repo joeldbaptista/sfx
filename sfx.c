@@ -1,6 +1,12 @@
 /* sfx.c — simple file explorer */
 
 #include "config.h"
+#include <stdio.h>
+#ifdef USE_READLINE
+#include <readline/history.h>
+#include <readline/readline.h>
+#undef ESC /* readline's chardefs.h defines ESC; we define our own below */
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <grp.h>
@@ -8,7 +14,6 @@
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -425,10 +430,17 @@ static void
 draw_status(void)
 {
 	const char *text;
+	char buf[PATH_MAX + 32];
 	int len;
 
 	cursor_at(g.rows, 1);
-	text = g.have_msg ? g.msg : g.cwd;
+	if (g.have_msg) {
+		text = g.msg;
+	} else {
+		snprintf(buf, sizeof(buf), "%d/%d - %s",
+		    g.nent > 0 ? g.sel + 1 : 0, g.nent, g.cwd);
+		text = buf;
+	}
 	len = (int)strlen(text);
 	if (len > g.cols)
 		text += len - g.cols;
@@ -657,6 +669,26 @@ read_search(void)
 static void
 read_cmd(void)
 {
+#ifdef USE_READLINE
+	char *line;
+
+	cookmode();
+	cursor_at(g.rows, 1);
+	fputs(ESC_NRM ESC_EL, stdout);
+	fflush(stdout);
+	line = readline(":");
+	rawmode();
+	if (line == NULL || line[0] == '\0') {
+		free(line);
+		return;
+	}
+	add_history(line);
+	if (strcmp(line, "sh") == 0)
+		spawn_shell();
+	else
+		run_shell_cmd(line);
+	free(line);
+#else
 	char cmd[512];
 	int len, c;
 
@@ -690,6 +722,7 @@ read_cmd(void)
 		spawn_shell();
 	else
 		run_shell_cmd(cmd);
+#endif
 }
 
 static void
