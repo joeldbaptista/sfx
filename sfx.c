@@ -563,7 +563,6 @@ static void
 run_shell_cmd(const char *cmd)
 {
 	char *args[5];
-	char dummy[1];
 	pid_t pid;
 	int st;
 
@@ -593,10 +592,7 @@ run_shell_cmd(const char *cmd)
 	}
 	waitpid(pid, &st, 0);
 	signal(SIGINT, handle_exit);
-	fputs("\n[Press any key to continue]", stdout);
-	fflush(stdout);
 	rawmode();
-	read(STDIN_FILENO, dummy, 1);
 	load_dir(g.cwd);
 	if (g.sel >= g.nent)
 		g.sel = g.nent > 0 ? g.nent - 1 : 0;
