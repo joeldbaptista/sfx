@@ -118,6 +118,9 @@ static void draw_status(void);
 static void load_preview(void);
 static void draw_preview(int col_start, int width, int rows);
 static void draw(void);
+static const struct opener *match_opener(const char *name);
+static void open_bg(const char *cmd, const char *path, const char *name);
+static void open_fg(const char *cmd, const char *path);
 static void open_entry(void);
 static void spawn_shell(void);
 static int run_argv_silent(char **argv);
@@ -763,14 +766,105 @@ draw(void)
 	fflush(stdout);
 }
 
+/*
+ * Find the opener for a filename by scanning the openers[] table.
+ * Returns the first entry whose extension matches, or the default
+ * (ext == NULL) entry.
+ */
+static const struct opener *
+match_opener(const char *name)
+{
+	const struct opener *o;
+	size_t nlen, elen;
+
+	nlen = strlen(name);
+	for (o = openers; o->ext; o++) {
+		elen = strlen(o->ext);
+		if (nlen >= elen && strcmp(name + nlen - elen, o->ext) == 0)
+			return o;
+	}
+	return o; /* default entry (ext == NULL) */
+}
+
+/*
+ * Launch a background (GUI) opener: fork, detach, exec.
+ */
+static void
+open_bg(const char *cmd, const char *path, const char *name)
+{
+	char *args[3];
+	pid_t pid;
+	int fd;
+
+	pid = fork();
+	if (pid < 0) {
+		snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
+		g.have_msg = 1;
+		return;
+	}
+	if (pid == 0) {
+		fd = open("/dev/null", O_WRONLY);
+		if (fd >= 0) {
+			dup2(fd, STDOUT_FILENO);
+			dup2(fd, STDERR_FILENO);
+			close(fd);
+		}
+		setsid();
+		args[0] = (char *)cmd;
+		args[1] = (char *)path;
+		args[2] = NULL;
+		execvp(cmd, args);
+		_exit(127);
+	}
+	snprintf(g.msg, sizeof(g.msg), "%s %s", cmd, name);
+	g.have_msg = 1;
+}
+
+/*
+ * Launch a foreground (terminal) opener: swap to cooked mode, exec,
+ * wait, restore raw mode.
+ */
+static void
+open_fg(const char *cmd, const char *path)
+{
+	char *args[3];
+	pid_t pid;
+	int st;
+
+	cookmode();
+	fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
+	fflush(stdout);
+
+	signal(SIGINT, SIG_IGN);
+	pid = fork();
+	if (pid < 0) {
+		rawmode();
+		signal(SIGINT, handle_exit);
+		snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
+		g.have_msg = 1;
+		return;
+	}
+	if (pid == 0) {
+		signal(SIGINT, SIG_DFL);
+		args[0] = (char *)cmd;
+		args[1] = (char *)path;
+		args[2] = NULL;
+		execvp(cmd, args);
+		_exit(127);
+	}
+	waitpid(pid, &st, 0);
+	signal(SIGINT, handle_exit);
+	rawmode();
+	query_dims();
+	g.have_msg = 0;
+}
+
 static void
 open_entry(void)
 {
 	Entry *e;
 	char path[PATH_MAX];
-	char *args[3];
-	pid_t pid;
-	int st;
+	const struct opener *o;
 	struct stat follow;
 	mode_t mode;
 
@@ -792,32 +886,12 @@ open_entry(void)
 
 	if (!S_ISREG(mode))
 		return;
-	cookmode();
-	fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
-	fflush(stdout);
 
-	signal(SIGINT, SIG_IGN);
-	pid = fork();
-	if (pid < 0) {
-		rawmode();
-		signal(SIGINT, handle_exit);
-		snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
-		g.have_msg = 1;
-		return;
-	}
-	if (pid == 0) {
-		signal(SIGINT, SIG_DFL);
-		args[0] = EDITOR;
-		args[1] = path;
-		args[2] = NULL;
-		execvp(EDITOR, args);
-		_exit(127);
-	}
-	waitpid(pid, &st, 0);
-	signal(SIGINT, handle_exit);
-	rawmode();
-	query_dims();
-	g.have_msg = 0;
+	o = match_opener(e->name);
+	if (o->bg)
+		open_bg(o->cmd, path, e->name);
+	else
+		open_fg(o->cmd, path);
 }
 
 static void
