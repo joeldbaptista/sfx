@@ -88,7 +88,7 @@ struct state {
 	int have_msg;
 	char search[NAME_MAX + 1];
 	int have_search;
-	int search_dim; /* dim non-matching entries; cleared on cursor movement */
+	int search_dim;       /* dim non-matching entries; cleared on cursor movement */
 	int marks[26];        /* jump marks; -1 = unset */
 	int visual;           /* visual selection active */
 	int vanchor;          /* visual selection anchor index */
