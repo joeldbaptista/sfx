@@ -1849,13 +1849,13 @@ main(int argc, char *argv[])
 			tab_close();
 			draw();
 			break;
-
+#if 0
 		case '|':
 			g.split = !g.split;
 			g.ppath[0] = '\0'; /* force preview reload */
 			draw();
 			break;
-
+#endif
 		case ':':
 			read_cmd();
 			draw();
