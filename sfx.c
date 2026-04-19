@@ -1,4 +1,4 @@
-/* sfx.c — simple file explorer */
+/* sfx.c - simple file explorer */
 
 #include "config.h"
 #include <stdio.h>
@@ -39,6 +39,8 @@
 #define ESC_YEL   ESC "[33m"    /* yellow — special files */
 #define ESC_HIDE  ESC "[?25l"   /* hide cursor */
 #define ESC_SHOW  ESC "[?25h"   /* show cursor */
+
+#define BACKSPACE 0x7f
 
 #ifndef CLIPBOARD
 #define CLIPBOARD "xclip -selection clipboard"
@@ -1667,7 +1669,7 @@ main(int argc, char *argv[])
 			free(g.pents);
 			return 0;
 
-		case 0x1b: /* Escape — exit visual mode */
+		case 0x1b: /* ESC */
 			if (g.visual) {
 				g.visual = 0;
 				draw();
@@ -1702,7 +1704,7 @@ main(int argc, char *argv[])
 			draw();
 			break;
 
-		case 0x7f: /* Backspace */ /* FALLTHROUGH */
+		case BACKSPACE: /* FALLTHROUGH */
 		case 'h': {
 			char par[PATH_MAX];
 			char *p;
@@ -1730,7 +1732,7 @@ main(int argc, char *argv[])
 			g.search_dim = 0;
 			draw();
 			break;
-
+		
 		case 'G': /* FALLTHROUGH */
 		case KEY_END:
 			g.sel = g.nent > 0 ? g.nent - 1 : 0;
