@@ -90,7 +90,7 @@ struct state {
 	int have_msg;
 	char search[NAME_MAX + 1];
 	int have_search;
-	int search_dim;       /* dim non-matching entries; cleared on cursor movement */
+	int search_dim; /* dim non-matching entries; cleared on cursor movement */
 	int marks[26];        /* jump marks; -1 = unset */
 	int visual;           /* visual selection active */
 	int vanchor;          /* visual selection anchor index */
@@ -1629,6 +1629,7 @@ main(int argc, char *argv[])
 
 	for (;;) {
 		if (resize_pending) {
+refresh:
 			resize_pending = 0;
 			query_dims();
 			draw();
@@ -1661,6 +1662,9 @@ main(int argc, char *argv[])
 		full = g.rows - 1;
 
 		switch (c) {
+		case 'R':
+			goto refresh;
+
 		case 3: /* Ctrl-C */ /* FALLTHROUGH */
 		case 'q':	     /* FALLTHROUGH */
 		case 'Q':
@@ -1851,13 +1855,13 @@ main(int argc, char *argv[])
 			tab_close();
 			draw();
 			break;
-#if 0
+
 		case '|':
 			g.split = !g.split;
 			g.ppath[0] = '\0'; /* force preview reload */
 			draw();
 			break;
-#endif
+
 		case ':':
 			read_cmd();
 			draw();
