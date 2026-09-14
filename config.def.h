@@ -1,7 +1,6 @@
 /* config.h — sfx user configuration */
 
 #define SHELL "bash"	   /* shell for :sh and running commands */
-#define RCFILE "~/.bashrc" /* sourced before every status-bar command */
 
 /*
  * File opener dispatch table.
