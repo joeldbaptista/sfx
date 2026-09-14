@@ -859,6 +859,12 @@ open_fg(const char *cmd, const char *path)
 	rawmode();
 	query_dims();
 	g.have_msg = 0;
+
+	/* execvp failed in the child; report it instead of failing silently */
+	if (WIFEXITED(st) && WEXITSTATUS(st) == 127) {
+		snprintf(g.msg, sizeof(g.msg), "%s: command not found", cmd);
+		g.have_msg = 1;
+	}
 }
 
 static void
