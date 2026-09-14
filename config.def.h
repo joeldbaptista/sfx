@@ -14,6 +14,5 @@ static const struct opener {
 	const char *cmd;
 	int bg;
 } openers[] = {
-	{ ".pdf",  "evince", 1 },
-	{ 0,       "vic",    0 },  /* default: terminal editor */
+	{ 0,       "vi",    0 },  /* default: terminal editor */
 };
