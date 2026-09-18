@@ -1,0 +1,405 @@
+.Dd September 18, 2026
+.Dt SFX 1
+.Os
+.Sh NAME
+.Nm sfx
+.Nd simple file explorer
+.Sh SYNOPSIS
+.Nm
+.Op Ar directory
+.Sh DESCRIPTION
+.Nm
+is a terminal file explorer.
+It draws the listing of one directory on a canvas, keeps a one-line
+status bar at the bottom of the screen, and reads single keystrokes in
+raw mode.
+.Pp
+With no argument
+.Nm
+opens the current working directory.
+With one argument it opens
+.Ar directory .
+With two or more arguments it prints a usage message and exits.
+.Pp
+.Nm
+calls
+.Xr chdir 2
+on every navigation, so the working directory of the process always
+matches the path shown in the status bar.
+Relative paths given to the
+.Ic \&:
+prompt therefore resolve against the directory on screen.
+.Pp
+Every entry is rendered in
+.Xr ls 1
+.Fl la
+format: mode string, hard link count, owner, group, size, modification
+time, and name.
+Hidden files are always listed.
+Entries are sorted with
+.Pa \&.
+first,
+.Pa ..
+second, and the rest in byte-wise alphabetical order.
+.Pp
+The status bar shows the first of the following that applies:
+the current message, when there is one;
+.Ic [tab/ntabs] k/total - /current/path ,
+when more than one tab is open; or
+.Ic k/total - /current/path .
+.Ss Colours
+The first matching rule decides the appearance of an entry.
+This list is exhaustive.
+.Bl -tag -width "reverse video" -compact
+.It reverse video
+the selection, or an entry inside the visual selection
+.It dim
+a non-matching entry while search dimming is active
+.It bold
+a directory
+.It cyan
+a symbolic link
+.It yellow
+another non-regular file: device, FIFO or socket
+.It green
+a regular file with any execute bit set
+.It dim
+a regular file whose name starts with a dot
+.El
+.Sh KEYS
+.Ss Navigation
+.Bl -tag -width "Ctrl-F, (page down)" -compact
+.It Ic j , Aq down
+move the selection down one entry
+.It Ic k , Aq up
+move the selection up one entry
+.It Ic h , Aq backspace
+go to the parent directory
+.It Ic l , Aq enter
+enter the directory, or open the file
+.It Ic gg , Aq home
+jump to the first entry
+.It Ic G , Aq end
+jump to the last entry
+.It Ic Ctrl-D
+move down half a page
+.It Ic Ctrl-U
+move up half a page
+.It Ic Ctrl-F , Aq page down
+move down one full page
+.It Ic Ctrl-B , Aq page up
+move up one full page
+.It Ic Ctrl-L
+re-read the terminal size and redraw
+.It Ic R
+force a full refresh
+.It Ic q , Q , Ctrl-C
+quit
+.El
+.Pp
+Every movement key clears search dimming and clears the current status
+message, and keeps the search term itself.
+.Ss Search
+.Bl -tag -width "Ctrl-F, Page Down" -compact
+.It Ic /
+open the search prompt
+.It Ic n
+jump to the next match
+.It Ic N
+jump to the previous match
+.El
+.Pp
+Matching is a case-sensitive substring test against the entry name.
+On confirmation the cursor jumps to the next match and every
+non-matching entry is dimmed.
+.Ic n
+and
+.Ic N
+wrap around the end of the list.
+.Ss File operations
+.Bl -tag -width "Ctrl-F, Page Down" -compact
+.It Ic r
+rename the selected entry; the prompt is pre-filled with the current name
+.It Ic d
+delete the selected entry, or the whole visual selection, after
+confirmation
+.It Ic y
+copy the absolute path of the selected entry to the clipboard
+.El
+.Pp
+Renaming is a single
+.Xr rename 2
+call, so it cannot move an entry across filesystems.
+Deletion runs
+.Ic rm -rf
+on the path, so directories are removed recursively.
+The entries
+.Pa \&.
+and
+.Pa ..
+can be neither renamed nor deleted.
+The yanked path is written to the standard input of the
+.Dv CLIPBOARD
+command, which avoids all shell quoting problems.
+.Ss Visual selection
+.Bl -tag -width "Ctrl-F, Page Down" -compact
+.It Ic V
+start the visual selection, or stop it when it is already active
+.It Aq Ic escape
+cancel the visual selection
+.It Ic j , k
+extend the selected range
+.It Ic d
+delete every entry in the range, after confirmation
+.El
+.Pp
+.Pa \&.
+and
+.Pa ..
+are trimmed from both ends of the range before the count is computed, so
+they are never deleted.
+The selection is dropped on directory change and on tab switch.
+.Ss Marks, bookmarks and tabs
+.Bl -tag -width "Ctrl-F, Page Down" -compact
+.It Ic ma Ns \(en Ns Ic mz
+record the current entry index under that letter
+.It Ic 'a Ns \(en Ns Ic 'z
+move the cursor back to that index
+.It Ic mA Ns \(en Ns Ic mZ
+store the current directory as a persistent bookmark
+.It Ic 'A Ns \(en Ns Ic 'Z
+navigate to that bookmark
+.It Ic t
+open a new tab on the current directory
+.It Ic T
+open a new tab on
+.Ev HOME
+.It Ic gt
+switch to the next tab, wrapping around
+.It Ic gT
+switch to the previous tab, wrapping around
+.It Ic x
+close the current tab
+.It Ic \(ba
+toggle the two-panel split view
+.El
+.Pp
+Marks store an index, not a name, so they are meaningful only within one
+directory listing, and they are lost when
+.Nm
+exits.
+Bookmarks are written to disk as soon as they are set; see
+.Sx FILES .
+At most 8 tabs can exist.
+Each tab keeps its own directory, cursor position, scroll offset, search
+term and set of 26 marks.
+The split view is drawn only when the terminal is at least 20 columns
+wide.
+.Sh COMMANDS
+Press
+.Ic \&:
+to type a command in the status bar.
+.Aq enter
+runs it and
+.Aq escape
+cancels it.
+The following forms are recognised, and this list is exhaustive.
+.Bl -tag -width Ds
+.It Ic :cd
+navigate to
+.Ev HOME ,
+or to
+.Pa /
+when
+.Ev HOME
+is unset
+.It Ic :cd Ar path
+navigate to
+.Ar path ;
+a leading tilde is expanded to
+.Ev HOME
+.It Ic :sh
+start an interactive shell in the current directory
+.It Ic \&: Ns Ar command
+run
+.Ar command
+through the shell
+.El
+.Pp
+Every command other than
+.Ic :sh
+runs as
+.Ic SHELL -i -c Qq Ar command .
+The
+.Fl i
+flag makes the shell interactive, so it sources the rc file of the user
+and expands aliases.
+The listing is reloaded after the command, and the cursor stays on the
+same file name when that name still exists.
+.Ss Captured commands
+A command whose first word is not listed in
+.Va ttycmds[]
+runs with its standard output and standard error captured, and with
+.Pa /dev/null
+on its standard input.
+.Nm
+stays in raw mode and does not clear the screen, so the listing stays
+visible while the command runs.
+.Pp
+When the command produced output, that output is shown in a pane at the
+bottom of the screen: a rule, then the first lines of the output.
+The pane takes at most a third of the screen, and always leaves one row
+for the listing.
+The status line below the pane reports the command, its exit status when
+that status is not 0, and how many lines did not fit.
+.Aq enter
+dismisses the pane; navigating to another directory dismisses it too.
+Every other key leaves it on screen.
+.Pp
+When the command produced no output, no pane appears, and the status
+line reports the command and its exit status instead.
+.Pp
+Control characters other than newline are replaced by spaces before the
+output is shown, so a command cannot move the cursor or set attributes
+on the screen.
+While a captured command runs, the terminal signal keys are enabled, so
+.Ic Ctrl-C
+interrupts it.
+.Ic Ctrl-Z
+stays disabled, because stopping
+.Nm
+would leave the terminal in raw mode.
+.Ss Full-screen commands
+.Ic :sh
+execs the configured shell with no arguments.
+A command whose first word matches an entry of
+.Va ttycmds[]
+runs as an interactive shell command.
+In both cases
+.Nm
+leaves raw mode, clears the screen and hands the terminal over for the
+duration, which is what programs that draw their own screen, such as
+.Xr vi 1 ,
+.Xr less 1 ,
+.Xr man 1
+and
+.Xr top 1 ,
+require.
+Leave the program to return to
+.Nm ,
+which reloads the listing.
+.Pp
+Only the first word is matched against
+.Va ttycmds[] ,
+and its directory part is ignored, so
+.Ic :/usr/bin/vim notes.md
+is recognised.
+A program that needs the terminal but is not listed misbehaves under
+capture; add it to
+.Va ttycmds[]
+to fix that.
+.Sh CONFIGURATION
+.Nm
+is configured at compile time, in the suckless manner.
+The
+.Pa Makefile
+creates
+.Pa config.h
+once, by copying
+.Pa config.def.h ,
+and never overwrites it afterwards.
+Edit
+.Pa config.h
+and run
+.Xr make 1
+to apply a change.
+The following settings exist, and this list is exhaustive.
+.Bl -tag -width Ds
+.It Dv SHELL
+the shell used for
+.Ic :sh ,
+for
+.Ic \&:
+commands, and for the clipboard pipeline
+.It Dv CLIPBOARD
+the command that reads a path on standard input and copies it.
+It is absent from
+.Pa config.def.h ;
+the compiled-in default is
+.Ic xclip -selection clipboard .
+Use
+.Ic pbcopy
+on macOS, or
+.Ic wl-copy
+under Wayland
+.It Va openers[]
+the file opener dispatch table.
+Each row holds a file name suffix, or 0 for the default row that
+terminates the table; the program to run with the file path as its only
+argument; and a flag that is 1 to launch the program detached, for
+graphical applications, or 0 to run it in the foreground
+.It Va ttycmds[]
+the list of commands that need the terminal, terminated by 0.
+A
+.Ic \&:
+command whose first word matches an entry runs full-screen instead of
+being captured
+.El
+.Pp
+Build with
+.Ic make USE_READLINE=1
+to link against GNU readline.
+This gives the
+.Ic \&:
+prompt and the rename prompt tab completion of file names, cursor
+movement within the line, and within-session history.
+The search prompt never uses readline.
+.Sh ENVIRONMENT
+.Bl -tag -width XDG_DATA_HOME
+.It Ev HOME
+the target of
+.Ic :cd
+with no argument and of
+.Ic T ,
+and the location of the bookmark file
+.It Ev XDG_DATA_HOME
+when set and not empty, the base directory of the bookmark file
+.El
+.Pp
+The shell and the clipboard command are compile-time settings, so
+.Ev SHELL
+in the environment has no effect.
+.Sh FILES
+.Bl -tag -width "$HOME/.local/share/sfx/bookmarks" -compact
+.It Pa $XDG_DATA_HOME/sfx/bookmarks
+bookmark file, when
+.Ev XDG_DATA_HOME
+is set and not empty
+.It Pa $HOME/.local/share/sfx/bookmarks
+bookmark file, when
+.Ev HOME
+is set
+.It Pa /tmp/sfx-bookmarks
+bookmark file, otherwise
+.El
+.Pp
+The directory is created with mode 0700 when needed.
+The format is one line per bookmark: a letter, a space, then the path.
+Malformed lines are skipped on load.
+.Sh EXIT STATUS
+.Ex -std
+.Nm
+exits with status 1 when it is given more than one argument.
+.Sh SEE ALSO
+.Xr ls 1 ,
+.Xr rm 1 ,
+.Xr sh 1 ,
+.Xr stty 1
+.Sh AUTHORS
+.An Joel Silva Aq Mt jdbaptista@pm.me
+.Sh CAVEATS
+Output is byte-oriented, so a multi-byte character in a file name counts
+as several columns when a line is truncated.
+At most 4096 entries are read per directory, at most 256 lines and 8192
+bytes are kept from the output of a captured command, and status
+messages are truncated to 512 bytes.

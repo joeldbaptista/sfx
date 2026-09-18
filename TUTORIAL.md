@@ -18,8 +18,18 @@ The first build copies `config.def.h` to `config.h`. From then on
 alone. Edit it and run `make` again to change the configuration.
 
 ```
-make install        # installs /usr/local/bin/sfx
+make install        # installs /usr/local/bin/sfx and the sfx(1) manual
 ```
+
+`PREFIX` and `MANPREFIX` control where those go, and `DESTDIR` stages the
+installation somewhere else:
+
+```
+make install PREFIX=$HOME/.local
+```
+
+After installing, `man sfx` gives you the reference manual. `make
+uninstall` removes both files.
 
 ---
 

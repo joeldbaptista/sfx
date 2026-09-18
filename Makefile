@@ -1,5 +1,7 @@
-CC     = cc
-CFLAGS = -std=c99 -D_XOPEN_SOURCE=700 -Wall -Wextra -Werror -Wno-format-truncation -O2
+CC        = cc
+PREFIX    = /usr/local
+MANPREFIX = $(PREFIX)/share/man
+CFLAGS    = -std=c99 -D_XOPEN_SOURCE=700 -Wall -Wextra -Werror -Wno-format-truncation -O2
 
 # macOS hides BSD extensions such as SIGWINCH under a strict _XOPEN_SOURCE.
 ifeq ($(shell uname -s),Darwin)
@@ -22,10 +24,19 @@ config.h:
 	cp config.def.h $@
 
 install: sfx
-	install -m 755 sfx /usr/local/bin/sfx
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	install -m 755 sfx $(DESTDIR)$(PREFIX)/bin/sfx
+	mkdir -p $(DESTDIR)$(MANPREFIX)/man1
+	install -m 644 sfx.1 $(DESTDIR)$(MANPREFIX)/man1/sfx.1
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/sfx
+	rm -f $(DESTDIR)$(MANPREFIX)/man1/sfx.1
 
 frmt:
 	clang-format -i *.c *.h
 
 clean:
 	rm -f sfx
+
+.PHONY: install uninstall frmt clean

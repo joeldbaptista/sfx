@@ -3,6 +3,7 @@
 This document describes every functionality implemented in `sfx` at the
 current revision, and how to use each one. The list of features is
 exhaustive: it is derived from `sfx.c`, `config.def.h` and the `Makefile`.
+The manual page `sfx.1` covers the same ground in reference form.
 
 `sfx` is a terminal file explorer. It draws a listing of one directory on
 a canvas, keeps a one-line status bar at the bottom, and reads single
@@ -16,9 +17,21 @@ keystrokes in raw mode.
 |---------|--------|
 | `make` | Compiles `sfx` from `sfx.c` and `config.h` |
 | `make USE_READLINE=1` | Compiles with GNU readline support (see section 12) |
-| `make install` | Installs the binary as `/usr/local/bin/sfx`, mode 755 |
+| `make install` | Installs the binary and the manual page |
+| `make uninstall` | Removes both installed files |
 | `make frmt` | Runs `clang-format -i` over `*.c` and `*.h` |
 | `make clean` | Removes the `sfx` binary |
+
+`make install` writes `$(DESTDIR)$(PREFIX)/bin/sfx` with mode 755 and
+`$(DESTDIR)$(MANPREFIX)/man1/sfx.1` with mode 644, creating both
+directories when they are missing. `PREFIX` defaults to `/usr/local` and
+`MANPREFIX` to `$(PREFIX)/share/man`, so the manual is readable as
+`man sfx` after installation. Override them on the command line:
+
+```
+make install PREFIX=$HOME/.local
+make install DESTDIR=/tmp/stage
+```
 
 The build uses `cc -std=c99 -D_XOPEN_SOURCE=700 -Wall -Wextra -Werror -O2`.
 On macOS the `Makefile` adds `-D_DARWIN_C_SOURCE`, because macOS hides
