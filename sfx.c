@@ -1295,8 +1295,9 @@ run_capture(const char *cmd)
 	close(pfd[0]);
 	waitpid(pid, &st, 0);
 	signal(SIGINT, handle_exit);
+	reclaim_tty(); /* before sigkeys(): tcsetattr() from a background
+	                * process group is what stops us */
 	sigkeys(0);
-	reclaim_tty();
 
 	g.out[len] = '\0';
 	g.outst = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
