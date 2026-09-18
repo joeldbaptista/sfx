@@ -252,6 +252,49 @@ interactive shell, so the shell sources its own rc file and aliases are
 available. The canvas is reloaded after every command and the cursor stays
 on the same filename if it still exists.
 
+### Where the output goes
+
+Most commands keep their output inside `sfx`. The listing stays on
+screen, the command runs, and its output appears in a pane at the bottom:
+
+```
+LICENSE.md
+Makefile
+README.md
+--------------------------------------------------------------
+LICENSE.md      README.md       config.h        sfx.c
+Makefile        STYLE.md        sfx
+:ls — +2 more — Enter to dismiss
+```
+
+Press `Enter` to dismiss the pane and get the normal status bar back.
+The pane holds at most a third of the screen; the status line tells you
+how many lines were left out. A command that prints nothing gets no pane,
+just a status line such as `:mkdir notes — exit 0`.
+
+Standard error is captured too, so a failing command shows you why:
+
+```
+:rm nosuch — exit 1
+```
+
+`Ctrl-C` interrupts a command that takes too long.
+
+### Commands that take over the screen
+
+Editors, pagers and monitors need the terminal to themselves, so they get
+it:
+
+```
+:vi README.md
+:man ls
+:less sfx.c
+```
+
+These run full-screen, exactly as they would in a shell, and `sfx` comes
+back when you leave them. The list of such programs is `ttycmds[]` in
+`config.h`; add any program that draws its own screen and is missing.
+
 ### Changing directory
 
 ```
@@ -301,6 +344,7 @@ Edit `config.h` and recompile (`make`) to change defaults.
 | `SHELL`     | `"bash"`                       | Shell used for `:sh` and status bar commands       |
 | `CLIPBOARD` | `"xclip -selection clipboard"` | Command that reads a path from stdin and copies it |
 | `openers[]` | `vi` for everything            | Which program opens which file                     |
+| `ttycmds[]` | editors, pagers, monitors      | Which `:` commands run full-screen instead of captured |
 
 `CLIPBOARD` is not present in `config.def.h`; its default lives in
 `sfx.c`. Define it in `config.h` to override it:

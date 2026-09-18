@@ -323,16 +323,62 @@ exhaustive:
 | `:cd` | navigate to `$HOME`, or to `/` when `HOME` is unset |
 | `:cd <path>` | navigate to `<path>`; a leading `~` is expanded to `$HOME` |
 | `:sh` | start an interactive shell in the current directory |
-| anything else | run the text through the configured shell |
+| a command whose first word is listed in `ttycmds[]` | run it full-screen, with the terminal handed over |
+| anything else | run it with its output captured into the output pane |
 
-A general command runs as `SHELL -i -c "<command>"`. The `-i` flag makes
-the shell interactive, so it sources the user's rc file and expands
-aliases. `sfx` leaves raw mode and clears the screen for the duration of
-the command, then reloads the listing and keeps the cursor on the same
-file name when that name still exists.
+Every command other than `:sh` runs as `SHELL -i -c "<command>"`. The
+`-i` flag makes the shell interactive, so it sources the user's rc file
+and expands aliases. The listing is reloaded after the command, and the
+cursor stays on the same file name when that name still exists.
 
-`:sh` execs `SHELL` with no arguments. Leave the shell (`exit`, or
-`Ctrl-D`) to return to `sfx`. The listing is reloaded on return.
+### Captured commands and the output pane
+
+A command whose first word is not listed in `ttycmds[]` runs with its
+standard output and standard error captured, and with `/dev/null` on its
+standard input. `sfx` stays in raw mode and does not clear the screen, so
+the listing stays visible while the command runs.
+
+When the command produced output, that output is shown in a pane at the
+bottom of the screen: a rule, then the first lines of the output. The
+pane takes at most a third of the screen, and it always leaves at least
+one row for the listing. The status line below the pane reports the
+command, its exit status when that status is not 0, and how many lines
+did not fit. `Enter` dismisses the pane and returns the status bar to its
+normal contents. Navigating to another directory dismisses it too,
+because the output belongs to the directory it was produced in. Every
+other key leaves the pane on screen.
+
+When the command produced no output, no pane appears, and the status line
+reports `:<command> — exit <n>` instead.
+
+Captured output is sanitised before it is shown: control characters other
+than newline become spaces, so a command cannot move the cursor or set
+attributes on the screen.
+
+While a captured command runs, the terminal signal keys are enabled, so
+`Ctrl-C` interrupts the command. `Ctrl-Z` remains disabled, because
+stopping `sfx` would leave the terminal in raw mode.
+
+### Full-screen commands
+
+`:sh` execs `SHELL` with no arguments. A command whose first word matches
+an entry of `ttycmds[]` runs as `SHELL -i -c "<command>"`. In both cases
+`sfx` leaves raw mode, clears the screen, and hands the terminal over for
+the duration, which is what programs that draw their own screen (`vi`,
+`less`, `man`, `top`) require. Leave the program (`exit`, `Ctrl-D`, `:q`,
+`q`, as the program requires) to return to `sfx`. The listing is reloaded
+on return.
+
+Only the first word of the command is matched against `ttycmds[]`, and
+its directory part is ignored, so `:/usr/bin/vim notes.md` is recognised.
+A program that needs the terminal but is not listed misbehaves under
+capture; add it to `ttycmds[]` in `config.h` to fix that.
+
+After any child that used the terminal exits, `sfx` makes its own process
+group the foreground process group of the terminal again. An interactive
+shell takes the terminal for job control and does not hand it back, and a
+process that then touches the terminal from a background process group is
+stopped by `SIGTTOU`.
 
 Because `sfx` keeps the process working directory synchronised with the
 displayed path, relative paths in these commands resolve against the
@@ -392,6 +438,23 @@ must come last. Example:
 };
 ```
 
+### `ttycmds[]`
+
+The list of commands that need the terminal. A `:` command whose first
+word matches an entry runs full-screen instead of being captured. The
+list is an array of strings terminated by `0`:
+
+```c
+static const char *ttycmds[] = {
+	"vi", "vim", "less", "man", "top",
+	0
+};
+```
+
+Matching is an exact comparison of whole words, so `vim` does not match
+`vimdiff`. The default list covers the common terminal editors, pagers,
+monitors and shells.
+
 ### Readline (build-time option)
 
 Build with `make USE_READLINE=1` to link against GNU readline. This
@@ -419,6 +482,8 @@ program.
   bytes.
 - Status messages are truncated to 512 bytes, and `:` commands to 512
   bytes.
+- Captured command output is truncated to 8192 bytes and to 256 lines,
+  and the command name shown in the status line to 63 bytes.
 - Output is byte-oriented, so multi-byte characters in file names are
   counted as several columns when a line is truncated.
 

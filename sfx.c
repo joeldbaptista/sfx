@@ -25,20 +25,20 @@
 #include <time.h>
 #include <unistd.h>
 
-#define ESC       "\033"
-#define ESC_CUP   ESC "[%d;%dH" /* cursor position (1-based) */
-#define ESC_EL    ESC "[K"      /* erase to end of line */
-#define ESC_ED    ESC "[2J"     /* erase display */
-#define ESC_HOME  ESC "[H"      /* cursor to top-left */
-#define ESC_REV   ESC "[7m"     /* reverse video */
-#define ESC_NRM   ESC "[m"      /* attributes off */
-#define ESC_BOLD  ESC "[1m"     /* bold */
-#define ESC_DIM   ESC "[2m"     /* dim/faint */
-#define ESC_CYAN  ESC "[36m"    /* cyan — symlinks */
-#define ESC_GREEN ESC "[32m"    /* green — executables */
-#define ESC_YEL   ESC "[33m"    /* yellow — special files */
-#define ESC_HIDE  ESC "[?25l"   /* hide cursor */
-#define ESC_SHOW  ESC "[?25h"   /* show cursor */
+#define ESC "\033"
+#define ESC_CUP ESC "[%d;%dH" /* cursor position (1-based) */
+#define ESC_EL ESC "[K"	      /* erase to end of line */
+#define ESC_ED ESC "[2J"      /* erase display */
+#define ESC_HOME ESC "[H"     /* cursor to top-left */
+#define ESC_REV ESC "[7m"     /* reverse video */
+#define ESC_NRM ESC "[m"      /* attributes off */
+#define ESC_BOLD ESC "[1m"    /* bold */
+#define ESC_DIM ESC "[2m"     /* dim/faint */
+#define ESC_CYAN ESC "[36m"   /* cyan — symlinks */
+#define ESC_GREEN ESC "[32m"  /* green — executables */
+#define ESC_YEL ESC "[33m"    /* yellow — special files */
+#define ESC_HIDE ESC "[?25l"  /* hide cursor */
+#define ESC_SHOW ESC "[?25h"  /* show cursor */
 
 #define BACKSPACE 0x7f
 
@@ -46,8 +46,10 @@
 #define CLIPBOARD "xclip -selection clipboard"
 #endif
 
-#define MAXENT   4096
+#define MAXENT 4096
 #define MSGBUFSZ 512
+#define OUTBUFSZ 8192 /* captured output of a `:` command */
+#define MAXOUT 256    /* lines kept from that output */
 
 enum {
 	KEY_UP = 256,
@@ -90,20 +92,29 @@ struct state {
 	int have_msg;
 	char search[NAME_MAX + 1];
 	int have_search;
-	int search_dim; /* dim non-matching entries; cleared on cursor movement */
-	int marks[26];        /* jump marks; -1 = unset */
-	int visual;           /* visual selection active */
-	int vanchor;          /* visual selection anchor index */
-	int pending_g;        /* waiting for second 'g' press */
-	int split;            /* split-panel mode */
-	Entry *pents;         /* preview panel entries */
-	int pnent;            /* preview entry count */
+	int search_dim; /* dim non-matching entries; cleared on cursor movement
+			 */
+	int marks[26];	/* jump marks; -1 = unset */
+	int visual;	/* visual selection active */
+	int vanchor;	/* visual selection anchor index */
+	int pending_g;	/* waiting for second 'g' press */
+	int split;	/* split-panel mode */
+	Entry *pents;	/* preview panel entries */
+	int pnent;	/* preview entry count */
 	char ppath[PATH_MAX]; /* path currently loaded in pents */
+	char out[OUTBUFSZ];   /* captured output of the last `:` command */
+	char *outl[MAXOUT];   /* line starts inside out */
+	int nout;	      /* lines captured; 0 = no output pane */
+	int outtrunc;	      /* output did not fit in out or outl */
+	char outcmd[64];      /* command that produced out */
+	int outst;	      /* exit status of that command */
 };
 
 /* prototypes */
 static void rawmode(void);
 static void cookmode(void);
+static void sigkeys(int on);
+static void reclaim_tty(void);
 static void query_dims(void);
 static int readkey(void);
 static void fmt_mode(mode_t m, char *buf);
@@ -115,8 +126,14 @@ static int load_dir(const char *path);
 static void reload_dir(void);
 static void nav_to(const char *path);
 static void cursor_at(int row, int col);
-static void draw_entry(int row, int idx, Entry *e, int col_start, int max_width);
+static void draw_entry(int row, int idx, Entry *e, int col_start,
+		       int max_width);
 static void draw_status(void);
+static void clear_out(void);
+static void split_out(void);
+static int out_shown(void);
+static void out_hint(char *buf, size_t bufsz);
+static void draw_out(int row, int n);
 static void load_preview(void);
 static void draw_preview(int col_start, int width, int rows);
 static void draw(void);
@@ -126,12 +143,15 @@ static void open_fg(const char *cmd, const char *path);
 static void open_entry(void);
 static void spawn_shell(void);
 static int run_argv_silent(char **argv);
-static void run_shell_cmd(const char *cmd);
+static int needstty(const char *cmd);
+static void run_tty(const char *cmd);
+static void run_capture(const char *cmd);
 static void rename_entry(void);
 static void delete_entry(void);
 static void delete_visual(void);
 static void yank_path(void);
-static void read_str(const char *prompt, char *buf, int bufsz, const char *prefill);
+static void read_str(const char *prompt, char *buf, int bufsz,
+		     const char *prefill);
 static void read_cmd(void);
 static void read_search(void);
 static void search_jump(int dir);
@@ -194,6 +214,45 @@ static void
 cookmode(void)
 {
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &g.orig);
+}
+
+/*
+ * Turn the terminal signal keys on or off without leaving raw mode, so
+ * that Ctrl-C reaches a child whose output we are capturing. Ctrl-Z is
+ * disabled along the way, because stopping sfx here leaves the terminal
+ * in raw mode.
+ */
+static void
+sigkeys(int on)
+{
+	struct termios t;
+
+	if (tcgetattr(STDIN_FILENO, &t) < 0)
+		return;
+	if (on) {
+		t.c_lflag |= ISIG;
+		t.c_cc[VSUSP] = _POSIX_VDISABLE;
+	} else {
+		t.c_lflag &= ~(unsigned)ISIG;
+	}
+	tcsetattr(STDIN_FILENO, TCSANOW, &t);
+}
+
+/*
+ * Make our process group the foreground group of the terminal again.
+ * An interactive child shell takes the terminal for job control and
+ * does not hand it back, and a background process that then calls
+ * tcsetattr() is stopped by SIGTTOU. tcsetpgrp() raises SIGTTOU for the
+ * same reason, so the signal is ignored across the call.
+ */
+static void
+reclaim_tty(void)
+{
+	void (*old)(int);
+
+	old = signal(SIGTTOU, SIG_IGN);
+	tcsetpgrp(STDIN_FILENO, getpgrp());
+	signal(SIGTTOU, old);
 }
 
 static void
@@ -474,6 +533,7 @@ nav_to(const char *path)
 	g.top = 0;
 	g.have_msg = 0;
 	g.visual = 0;
+	clear_out();	   /* the output belongs to the directory we left */
 	g.ppath[0] = '\0'; /* invalidate preview cache */
 
 	/* navigating up: position cursor on the dir we came from */
@@ -548,13 +608,122 @@ draw_entry(int row, int idx, Entry *e, int col_start, int max_width)
 	fputs(buf, stdout);
 
 	if (max_width < g.cols) {
-		/* split mode: pad to fill panel so the right panel isn't clobbered */
+		/* split mode: pad to fill panel so the right panel isn't
+		 * clobbered */
 		pad = max_width - blen;
 		while (pad-- > 0)
 			putchar(' ');
 		fputs(ESC_NRM, stdout);
 	} else {
 		fputs(ESC_EL ESC_NRM, stdout);
+	}
+}
+
+static void
+clear_out(void)
+{
+	g.nout = 0;
+	g.outtrunc = 0;
+	g.outcmd[0] = '\0';
+}
+
+/*
+ * Split the captured output into lines. Control characters other than
+ * newline become spaces, so that a command cannot move our cursor or
+ * set attributes on our screen.
+ */
+static void
+split_out(void)
+{
+	char *p;
+	int i;
+
+	g.nout = 0;
+	p = g.out;
+	for (i = 0; g.out[i]; i++) {
+		if (g.out[i] == '\n') {
+			g.out[i] = '\0';
+			if (g.nout >= MAXOUT) {
+				g.outtrunc = 1;
+				return;
+			}
+			g.outl[g.nout++] = p;
+			p = g.out + i + 1;
+		} else if ((unsigned char)g.out[i] < ' ') {
+			g.out[i] = ' ';
+		}
+	}
+	if (*p != '\0') {
+		if (g.nout < MAXOUT)
+			g.outl[g.nout++] = p;
+		else
+			g.outtrunc = 1;
+	}
+	while (g.nout > 0 && g.outl[g.nout - 1][0] == '\0')
+		g.nout--;
+}
+
+/*
+ * Number of captured lines the output pane shows. The pane takes at
+ * most a third of the screen, and always leaves one row for the
+ * listing. Returns 0 when there is nothing to show.
+ */
+static int
+out_shown(void)
+{
+	int max;
+
+	if (g.nout <= 0)
+		return 0;
+	max = (g.rows - 1) / 3;
+	if (max > g.rows - 3)
+		max = g.rows - 3;
+	if (max < 1)
+		return 0;
+	return g.nout < max ? g.nout : max;
+}
+
+/*
+ * Build the status line shown while the output pane is up.
+ */
+static void
+out_hint(char *buf, size_t bufsz)
+{
+	char more[64];
+	char st[32];
+	int rest;
+
+	rest = g.nout - out_shown();
+	more[0] = st[0] = '\0';
+	if (rest > 0 && g.outtrunc)
+		snprintf(more, sizeof(more), "+%d more, truncated — ", rest);
+	else if (rest > 0)
+		snprintf(more, sizeof(more), "+%d more — ", rest);
+	else if (g.outtrunc)
+		snprintf(more, sizeof(more), "truncated — ");
+	if (g.outst != 0)
+		snprintf(st, sizeof(st), " (exit %d)", g.outst);
+	snprintf(buf, bufsz, ":%s%s — %sEnter to dismiss", g.outcmd, st, more);
+}
+
+/*
+ * Draw the output pane: a rule on row, then the first n captured lines
+ * below it.
+ */
+static void
+draw_out(int row, int n)
+{
+	int i;
+
+	cursor_at(row, 1);
+	fputs(ESC_DIM, stdout);
+	for (i = 0; i < g.cols; i++)
+		putchar('-');
+	fputs(ESC_NRM, stdout);
+	for (i = 0; i < n; i++) {
+		cursor_at(row + 1 + i, 1);
+		printf("%.*s", g.cols, g.outl[i]);
+		fputs(ESC_EL, stdout);
 	}
 }
 
@@ -568,14 +737,16 @@ draw_status(void)
 	cursor_at(g.rows, 1);
 	if (g.have_msg) {
 		text = g.msg;
+	} else if (g.nout > 0) {
+		out_hint(buf, sizeof(buf));
+		text = buf;
 	} else if (ntabs > 1) {
-		snprintf(buf, sizeof(buf), "[%d/%d] %d/%d - %s",
-		    curtab + 1, ntabs,
-		    g.nent > 0 ? g.sel + 1 : 0, g.nent, g.cwd);
+		snprintf(buf, sizeof(buf), "[%d/%d] %d/%d - %s", curtab + 1,
+			 ntabs, g.nent > 0 ? g.sel + 1 : 0, g.nent, g.cwd);
 		text = buf;
 	} else {
 		snprintf(buf, sizeof(buf), "%d/%d - %s",
-		    g.nent > 0 ? g.sel + 1 : 0, g.nent, g.cwd);
+			 g.nent > 0 ? g.sel + 1 : 0, g.nent, g.cwd);
 		text = buf;
 	}
 	len = (int)strlen(text);
@@ -718,8 +889,10 @@ static void
 draw(void)
 {
 	int i, row, visible, lwidth, sep, rstart, rwidth;
+	int outn;
 
-	visible = g.rows - 1;
+	outn = out_shown();
+	visible = g.rows - 1 - (outn > 0 ? outn + 1 : 0);
 	if (visible < 1)
 		visible = 1;
 
@@ -732,7 +905,7 @@ draw(void)
 
 	if (g.split && g.cols >= 20) {
 		lwidth = g.cols / 2 - 1;
-		sep    = lwidth + 1;
+		sep = lwidth + 1;
 		rstart = lwidth + 2;
 		rwidth = g.cols - rstart + 1;
 		load_preview();
@@ -761,6 +934,9 @@ draw(void)
 
 	if (rstart)
 		draw_preview(rstart, rwidth, visible);
+
+	if (outn > 0)
+		draw_out(visible + 1, outn);
 
 	draw_status();
 	fflush(stdout);
@@ -856,6 +1032,7 @@ open_fg(const char *cmd, const char *path)
 	}
 	waitpid(pid, &st, 0);
 	signal(SIGINT, handle_exit);
+	reclaim_tty();
 	rawmode();
 	query_dims();
 	g.have_msg = 0;
@@ -931,6 +1108,7 @@ spawn_shell(void)
 	}
 	waitpid(pid, &st, 0);
 	signal(SIGINT, handle_exit);
+	reclaim_tty();
 	rawmode();
 	query_dims();
 	reload_dir();
@@ -967,13 +1145,47 @@ run_argv_silent(char **argv)
 	return (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : -1;
 }
 
+/*
+ * Report whether cmd names a program that needs the terminal. Only the
+ * first word is examined, and its directory part is ignored.
+ */
+static int
+needstty(const char *cmd)
+{
+	const char **p;
+	const char *base;
+	size_t i, n;
+
+	while (*cmd == ' ')
+		cmd++;
+	base = cmd;
+	for (i = 0; cmd[i] && cmd[i] != ' '; i++) {
+		if (cmd[i] == '/')
+			base = cmd + i + 1;
+	}
+	n = (size_t)(cmd + i - base);
+	if (n == 0)
+		return 0;
+	for (p = ttycmds; *p; p++) {
+		if (strlen(*p) == n && strncmp(base, *p, n) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * Run cmd through the shell with the terminal handed over: leave raw
+ * mode, clear the screen, wait for the command, then take the terminal
+ * back. This is the path for programs that draw their own screen.
+ */
 static void
-run_shell_cmd(const char *cmd)
+run_tty(const char *cmd)
 {
 	char *args[5];
 	pid_t pid;
 	int st;
 
+	clear_out();
 	cookmode();
 	fputs(ESC_NRM ESC_ED ESC_HOME, stdout);
 	fflush(stdout);
@@ -1000,9 +1212,105 @@ run_shell_cmd(const char *cmd)
 	}
 	waitpid(pid, &st, 0);
 	signal(SIGINT, handle_exit);
+	reclaim_tty();
 	rawmode();
+	query_dims();
 	reload_dir();
 	g.have_msg = 0;
+}
+
+/*
+ * Run cmd through the shell with its output captured into the output
+ * pane. sfx stays in raw mode and the screen is not cleared, so the
+ * listing stays on screen while the command runs. Standard input is
+ * /dev/null, because the command must not consume our keystrokes.
+ */
+static void
+run_capture(const char *cmd)
+{
+	char *args[5];
+	pid_t pid;
+	int st, fd, pfd[2];
+	ssize_t n;
+	size_t len;
+
+	if (pipe(pfd) < 0) {
+		snprintf(g.msg, sizeof(g.msg), "pipe: %s", strerror(errno));
+		g.have_msg = 1;
+		return;
+	}
+
+	clear_out();
+	snprintf(g.outcmd, sizeof(g.outcmd), "%s", cmd);
+	snprintf(g.msg, sizeof(g.msg), ":%s — running", g.outcmd);
+	g.have_msg = 1;
+	draw_status();
+	fflush(stdout);
+
+	sigkeys(1); /* so Ctrl-C interrupts the command, not sfx */
+	signal(SIGINT, SIG_IGN);
+	pid = fork();
+	if (pid < 0) {
+		close(pfd[0]);
+		close(pfd[1]);
+		signal(SIGINT, handle_exit);
+		sigkeys(0);
+		snprintf(g.msg, sizeof(g.msg), "fork: %s", strerror(errno));
+		g.have_msg = 1;
+		return;
+	}
+	if (pid == 0) {
+		signal(SIGINT, SIG_DFL);
+		close(pfd[0]);
+		fd = open("/dev/null", O_RDONLY);
+		if (fd >= 0) {
+			dup2(fd, STDIN_FILENO);
+			close(fd);
+		}
+		dup2(pfd[1], STDOUT_FILENO);
+		dup2(pfd[1], STDERR_FILENO);
+		close(pfd[1]);
+		args[0] = SHELL;
+		args[1] =
+		    "-i"; /* interactive: sources rc file, expands aliases */
+		args[2] = "-c";
+		args[3] = (char *)cmd;
+		args[4] = NULL;
+		execvp(SHELL, args);
+		_exit(127);
+	}
+
+	close(pfd[1]);
+	len = 0;
+	while (len < sizeof(g.out) - 1) {
+		n = read(pfd[0], g.out + len, sizeof(g.out) - 1 - len);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			break;
+		len += (size_t)n;
+	}
+	if (len >= sizeof(g.out) - 1)
+		g.outtrunc = 1; /* the rest of the output is dropped */
+	close(pfd[0]);
+	waitpid(pid, &st, 0);
+	signal(SIGINT, handle_exit);
+	sigkeys(0);
+	reclaim_tty();
+
+	g.out[len] = '\0';
+	g.outst = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+	split_out();
+	reload_dir();
+	g.have_msg = 0;
+
+	/* no output to show: report the command on the status line instead */
+	if (g.nout == 0) {
+		snprintf(g.msg, sizeof(g.msg), ":%s — exit %d", g.outcmd,
+			 g.outst);
+		g.have_msg = 1;
+		clear_out();
+	}
 }
 
 /*
@@ -1084,7 +1392,8 @@ delete_entry(void)
 	argv[3] = NULL;
 
 	if (run_argv_silent(argv) < 0) {
-		snprintf(g.msg, sizeof(g.msg), "delete failed: %s", strerror(errno));
+		snprintf(g.msg, sizeof(g.msg), "delete failed: %s",
+			 strerror(errno));
 		g.have_msg = 1;
 	} else {
 		g.ppath[0] = '\0';
@@ -1106,13 +1415,11 @@ delete_visual(void)
 	hi = g.vanchor > g.sel ? g.vanchor : g.sel;
 
 	/* skip . and .. */
-	while (lo <= hi &&
-	       (strcmp(g.ents[lo].name, ".") == 0 ||
-	        strcmp(g.ents[lo].name, "..") == 0))
+	while (lo <= hi && (strcmp(g.ents[lo].name, ".") == 0 ||
+			    strcmp(g.ents[lo].name, "..") == 0))
 		lo++;
-	while (hi >= lo &&
-	       (strcmp(g.ents[hi].name, ".") == 0 ||
-	        strcmp(g.ents[hi].name, "..") == 0))
+	while (hi >= lo && (strcmp(g.ents[hi].name, ".") == 0 ||
+			    strcmp(g.ents[hi].name, "..") == 0))
 		hi--;
 	if (lo > hi)
 		return;
@@ -1201,7 +1508,8 @@ yank_path(void)
 	if (WIFEXITED(st) && WEXITSTATUS(st) == 0) {
 		snprintf(g.msg, sizeof(g.msg), "yanked: %s", path);
 	} else {
-		snprintf(g.msg, sizeof(g.msg), "yank failed — check CLIPBOARD in config.h");
+		snprintf(g.msg, sizeof(g.msg),
+			 "yank failed — check CLIPBOARD in config.h");
 	}
 	g.have_msg = 1;
 }
@@ -1316,7 +1624,8 @@ read_cmd(void)
 		if (arg[0] == '~' && (arg[1] == '/' || arg[1] == '\0')) {
 			home = getenv("HOME");
 			if (home)
-				snprintf(path, sizeof(path), "%s%s", home, arg + 1);
+				snprintf(path, sizeof(path), "%s%s", home,
+					 arg + 1);
 			else
 				snprintf(path, sizeof(path), "%s", arg);
 		} else {
@@ -1328,8 +1637,10 @@ read_cmd(void)
 
 	if (strcmp(cmd, "sh") == 0)
 		spawn_shell();
+	else if (needstty(cmd))
+		run_tty(cmd);
 	else
-		run_shell_cmd(cmd);
+		run_capture(cmd);
 }
 
 static void
@@ -1446,7 +1757,8 @@ tab_new(const char *path)
 	int i;
 
 	if (ntabs >= MAXTABS) {
-		snprintf(g.msg, sizeof(g.msg), "tab limit reached (%d)", MAXTABS);
+		snprintf(g.msg, sizeof(g.msg), "tab limit reached (%d)",
+			 MAXTABS);
 		g.have_msg = 1;
 		return;
 	}
@@ -1557,7 +1869,8 @@ bookmark_save(void)
 
 	f = fopen(bpath, "w");
 	if (!f) {
-		snprintf(g.msg, sizeof(g.msg), "bookmarks: %s", strerror(errno));
+		snprintf(g.msg, sizeof(g.msg), "bookmarks: %s",
+			 strerror(errno));
 		g.have_msg = 1;
 		return;
 	}
@@ -1583,7 +1896,8 @@ static void
 bookmark_jump(int idx)
 {
 	if (bookmarks[idx][0] == '\0') {
-		snprintf(g.msg, sizeof(g.msg), "bookmark '%c' not set", 'A' + idx);
+		snprintf(g.msg, sizeof(g.msg), "bookmark '%c' not set",
+			 'A' + idx);
 		g.have_msg = 1;
 		return;
 	}
@@ -1635,7 +1949,7 @@ main(int argc, char *argv[])
 
 	for (;;) {
 		if (resize_pending) {
-refresh:
+		refresh:
 			resize_pending = 0;
 			query_dims();
 			draw();
@@ -1661,6 +1975,13 @@ refresh:
 				tab_load((curtab - 1 + ntabs) % ntabs);
 				draw();
 			}
+			continue;
+		}
+
+		/* the output pane owns Enter until it is dismissed */
+		if (g.nout > 0 && (c == '\r' || c == '\n')) {
+			clear_out();
+			draw();
 			continue;
 		}
 
@@ -1742,7 +2063,7 @@ refresh:
 			g.search_dim = 0;
 			draw();
 			break;
-		
+
 		case 'G': /* FALLTHROUGH */
 		case KEY_END:
 			g.sel = g.nent > 0 ? g.nent - 1 : 0;
