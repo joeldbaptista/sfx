@@ -339,6 +339,18 @@ exhaustive:
 | a command whose first word is listed in `ttycmds[]` | run it full-screen, with the terminal handed over |
 | anything else | run it with its output captured into the output pane |
 
+`Tab` completes the path being typed at the end of the line. The first
+`Tab` inserts the first name in the current directory that starts with
+what was typed; each further `Tab` replaces it with the next such name,
+wrapping around at the end. The completion applies to the last
+whitespace-separated word, whatever the command is, so it serves `:cd`,
+`:cp`, `:mv` and any other command alike. A completed directory carries
+a trailing `/`, so a further `Tab` offers the names inside it.
+Candidates are sorted, and hidden names are offered only when the typed
+prefix itself starts with a dot. Any key other than `Tab` ends the
+cycle. When nothing matches the terminal bell rings and the line is left
+unchanged. The rename prompt does not complete.
+
 Every command other than `:sh` runs as `SHELL -i -c "<command>"`. The
 `-i` flag makes the shell interactive, so it sources the user's rc file
 and expands aliases. The listing is reloaded after the command, and the
@@ -472,9 +484,10 @@ monitors and shells.
 
 Build with `make USE_READLINE=1` to link against GNU readline. This
 changes the `:` prompt and the rename prompt to full readline line
-editing, which adds tab completion of file names, cursor movement within
-the line, and within-session history on `↑` and `↓`. Without this option
-the prompts support printable characters, `Backspace`, `Enter` to confirm,
+editing, which adds cursor movement within the line and within-session
+history on `↑` and `↓`. Readline's own completion replaces the built-in
+`Tab` completion of section 8. Without this option the prompts support
+printable characters, `Tab` completion, `Backspace`, `Enter` to confirm,
 and `Esc` to cancel.
 
 The search prompt (`/`) never uses readline; it always uses the built-in

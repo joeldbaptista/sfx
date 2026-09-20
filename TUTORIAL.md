@@ -322,13 +322,33 @@ back when you leave them. The list of such programs is `ttycmds[]` in
 This drops into an interactive shell in the current directory. Exit
 the shell (e.g. `exit` or `Ctrl-D`) to return to `sfx`.
 
-### Tab completion (optional)
+### Tab completion
+
+Press `Tab` to complete the path you are typing:
+
+```
+:cd hel<Tab>    → :cd hellfile
+       <Tab>    → :cd hello_dir/
+       <Tab>    → :cd help.txt
+```
+
+Each `Tab` swaps in the next matching name and wraps around at the end,
+so you cycle until the one you want appears. A directory arrives with a
+trailing `/`, and pressing `Tab` again then offers the names inside it.
+
+This works on the last word of the line, whatever the command is, so
+`:cp hel<Tab>` and `:mv a.txt hel<Tab>` complete as well. Hidden names
+are offered only once you type a leading dot. Any other key ends the
+cycle, and `Tab` on a prefix that matches nothing just rings the bell.
+
+### Readline (optional)
 
 Build with `make USE_READLINE=1` to get GNU readline in the `:` prompt.
-This adds tab completion (filenames by default), arrow-key line editing,
-and within-session command history (`↑`/`↓`). The rename prompt also
-benefits: the current filename is pre-filled and fully editable. The
-search prompt (`/`) always uses the built-in line reader.
+This adds arrow-key line editing and within-session command history
+(`↑`/`↓`), and readline's own completion takes over from the built-in
+one. The rename prompt also benefits: the current filename is pre-filled
+and fully editable. The search prompt (`/`) always uses the built-in
+line reader.
 
 ---
 

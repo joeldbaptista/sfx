@@ -226,6 +226,25 @@ run
 through the shell
 .El
 .Pp
+.Aq tab
+completes the path being typed at the end of the line.
+The first
+.Aq tab
+inserts the first name in the current directory that starts with what
+was typed; each further
+.Aq tab
+replaces it with the next such name and wraps around at the end.
+A completed directory carries a trailing
+.Pa / ,
+so a further
+.Aq tab
+offers the names inside it.
+Candidates are sorted, and hidden names are offered only when the typed
+prefix itself starts with a dot.
+Any key other than
+.Aq tab
+ends the cycle.
+.Pp
 Every command other than
 .Ic :sh
 runs as
@@ -351,8 +370,9 @@ Build with
 to link against GNU readline.
 This gives the
 .Ic \&:
-prompt and the rename prompt tab completion of file names, cursor
-movement within the line, and within-session history.
+prompt and the rename prompt readline's own completion, cursor movement
+within the line, and within-session history.
+It replaces the built-in completion described above.
 The search prompt never uses readline.
 .Sh ENVIRONMENT
 .Bl -tag -width XDG_DATA_HOME

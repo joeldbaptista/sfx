@@ -50,6 +50,7 @@
 #define MSGBUFSZ 512
 #define OUTBUFSZ 8192 /* captured output of a `:` command */
 #define MAXOUT 256    /* lines kept from that output */
+#define MAXCOMP 256   /* candidates kept per completion cycle */
 
 enum {
 	KEY_UP = 256,
@@ -150,8 +151,14 @@ static void rename_entry(void);
 static void delete_entry(void);
 static void delete_visual(void);
 static void yank_path(void);
+static void draw_prompt(const char *prompt, const char *buf);
+static int comp_cmp(const void *a, const void *b);
+static void comp_reset(void);
+static int comp_scan(const char *dir, const char *pfx);
+static int comp_start(const char *buf, int len);
+static int comp_path(char *buf, int bufsz, int len);
 static void read_str(const char *prompt, char *buf, int bufsz,
-		     const char *prefill);
+		     const char *prefill, int (*comp)(char *, int, int));
 static void read_cmd(void);
 static void read_search(void);
 static void search_jump(int dir);
@@ -1296,7 +1303,7 @@ run_capture(const char *cmd)
 	waitpid(pid, &st, 0);
 	signal(SIGINT, handle_exit);
 	reclaim_tty(); /* before sigkeys(): tcsetattr() from a background
-	                * process group is what stops us */
+			* process group is what stops us */
 	sigkeys(0);
 
 	g.out[len] = '\0';
@@ -1332,7 +1339,7 @@ rename_entry(void)
 	if (strcmp(e->name, ".") == 0 || strcmp(e->name, "..") == 0)
 		return;
 
-	read_str("rename: ", newname, sizeof(newname), e->name);
+	read_str("rename: ", newname, sizeof(newname), e->name, NULL);
 	if (newname[0] == '\0' || strcmp(newname, e->name) == 0)
 		return;
 
@@ -1515,6 +1522,177 @@ yank_path(void)
 	g.have_msg = 1;
 }
 
+/* Repaint the prompt line with the current input buffer. */
+static void
+draw_prompt(const char *prompt, const char *buf)
+{
+	cursor_at(g.rows, 1);
+	fputs(ESC_NRM ESC_EL, stdout);
+	fputs(prompt, stdout);
+	fputs(buf, stdout);
+	fflush(stdout);
+}
+
+/*
+ * Tab-completion state for the `:` prompt. ncomp is non-zero while a
+ * cycle is active: each further Tab swaps in the next candidate. Any
+ * other key calls comp_reset(), so the next Tab starts a fresh cycle.
+ */
+static char comps[MAXCOMP][NAME_MAX + 2]; /* room for a trailing '/' */
+static int ncomp;			  /* candidates found */
+static int icomp;			  /* candidate currently inserted */
+static int compbase;			  /* offset in buf of that candidate */
+
+static int
+comp_cmp(const void *a, const void *b)
+{
+	return strcmp((const char *)a, (const char *)b);
+}
+
+static void
+comp_reset(void)
+{
+	ncomp = 0;
+	icomp = 0;
+	compbase = 0;
+}
+
+/*
+ * Fill comps[] with the names in dir that start with pfx, sorted, each
+ * directory carrying a trailing '/'. Returns the number of candidates.
+ * Hidden names are offered only when pfx itself starts with a dot.
+ */
+static int
+comp_scan(const char *dir, const char *pfx)
+{
+	DIR *d;
+	struct dirent *de;
+	struct stat st;
+	char path[PATH_MAX];
+	size_t plen, k;
+	int n;
+
+	d = opendir(dir);
+	if (!d)
+		return 0;
+
+	plen = strlen(pfx);
+	n = 0;
+	while ((de = readdir(d)) != NULL && n < MAXCOMP) {
+		if (strcmp(de->d_name, ".") == 0 ||
+		    strcmp(de->d_name, "..") == 0)
+			continue;
+		if (plen == 0 && de->d_name[0] == '.')
+			continue;
+		if (strncmp(de->d_name, pfx, plen) != 0)
+			continue;
+		snprintf(comps[n], sizeof(comps[n]), "%s", de->d_name);
+		snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
+		k = strlen(comps[n]);
+		if (stat(path, &st) == 0 && S_ISDIR(st.st_mode) &&
+		    k + 1 < sizeof(comps[n])) {
+			comps[n][k] = '/';
+			comps[n][k + 1] = '\0';
+		}
+		n++;
+	}
+	closedir(d);
+	qsort(comps, (size_t)n, sizeof(comps[0]), comp_cmp);
+	return n;
+}
+
+/*
+ * Start a completion cycle for the token at the end of buf. The token
+ * runs from after the last space to the end; the part after its last
+ * '/' is the prefix to match, and the part before it names the
+ * directory to scan. Returns -1 when nothing matches.
+ */
+static int
+comp_start(const char *buf, int len)
+{
+	char dir[PATH_MAX];
+	char pfx[NAME_MAX + 1];
+	int tok, slash, i;
+	size_t n;
+
+	tok = 0;
+	slash = -1;
+	for (i = 0; i < len; i++) {
+		if (buf[i] == ' ')
+			tok = i + 1;
+		else if (buf[i] == '/')
+			slash = i;
+	}
+	if (slash < tok)
+		slash = -1; /* that '/' belongs to an earlier token */
+
+	if (slash >= 0) {
+		n = (size_t)(slash - tok) + 1; /* keep the '/' itself */
+		if (n >= sizeof(dir))
+			return -1;
+		memcpy(dir, buf + tok, n);
+		dir[n] = '\0';
+		compbase = slash + 1;
+	} else {
+		snprintf(dir, sizeof(dir), ".");
+		compbase = tok;
+	}
+
+	if (dir[0] == '~' && (dir[1] == '/' || dir[1] == '\0')) {
+		char tmp[PATH_MAX];
+		const char *home;
+
+		home = getenv("HOME");
+		if (home) {
+			snprintf(tmp, sizeof(tmp), "%s%s", home, dir + 1);
+			snprintf(dir, sizeof(dir), "%s", tmp);
+		}
+	}
+
+	n = (size_t)(len - compbase);
+	if (n >= sizeof(pfx))
+		return -1;
+	memcpy(pfx, buf + compbase, n);
+	pfx[n] = '\0';
+
+	ncomp = comp_scan(dir, pfx);
+	if (ncomp == 0)
+		return -1;
+	icomp = 0;
+	return 0;
+}
+
+/*
+ * Complete the path being typed at the end of buf. The first Tab
+ * inserts the first candidate; each further Tab replaces it with the
+ * next one and wraps around. Returns the new length of buf.
+ */
+static int
+comp_path(char *buf, int bufsz, int len)
+{
+	size_t n;
+
+	if (ncomp > 0) {
+		icomp = (icomp + 1) % ncomp;
+	} else if (comp_start(buf, len) < 0) {
+		putchar('\a');
+		return len;
+	}
+
+	n = strlen(comps[icomp]);
+	if (compbase + (int)n >= bufsz) {
+		comp_reset();
+		return len;
+	}
+	memcpy(buf + compbase, comps[icomp], n + 1);
+	len = compbase + (int)n;
+
+	/* a lone directory: let the next Tab list what is inside it */
+	if (ncomp == 1)
+		comp_reset();
+	return len;
+}
+
 #ifdef USE_READLINE
 static const char *rl_prefill_str;
 static int
@@ -1530,15 +1708,18 @@ rl_prefill_hook(void)
 /*
  * Read a string from the user into buf (at most bufsz-1 chars).
  * Shows prompt at the status bar. If prefill is non-NULL the input
- * is pre-populated with that string (useful for rename).
+ * is pre-populated with that string (useful for rename). If comp is
+ * non-NULL, Tab calls it to complete the input in place.
  * Sets buf[0] = '\0' if the user aborts with Escape.
  */
 static void
-read_str(const char *prompt, char *buf, int bufsz, const char *prefill)
+read_str(const char *prompt, char *buf, int bufsz, const char *prefill,
+	 int (*comp)(char *, int, int))
 {
 #ifdef USE_READLINE
 	char *line;
 
+	(void)comp; /* readline does its own completion */
 	cookmode();
 	cursor_at(g.rows, 1);
 	fputs(ESC_NRM ESC_EL, stdout);
@@ -1557,20 +1738,17 @@ read_str(const char *prompt, char *buf, int bufsz, const char *prefill)
 #else
 	int len, c;
 
-	cursor_at(g.rows, 1);
-	fputs(ESC_NRM ESC_EL, stdout);
-	fputs(prompt, stdout);
-
+	comp_reset();
 	len = 0;
+	buf[0] = '\0';
 	if (prefill && prefill[0]) {
 		len = (int)strlen(prefill);
 		if (len >= bufsz)
 			len = bufsz - 1;
 		memcpy(buf, prefill, len);
 		buf[len] = '\0';
-		fputs(buf, stdout);
 	}
-	fflush(stdout);
+	draw_prompt(prompt, buf);
 
 	for (;;) {
 		c = readkey();
@@ -1580,16 +1758,22 @@ read_str(const char *prompt, char *buf, int bufsz, const char *prefill)
 			buf[0] = '\0';
 			return;
 		}
-		if ((c == 0x7f || c == '\b') && len > 0) {
-			len--;
-			fputs("\b \b", stdout);
-			fflush(stdout);
+		if (c == '\t') {
+			if (comp)
+				len = comp(buf, bufsz, len);
+			draw_prompt(prompt, buf);
+			continue;
+		}
+		comp_reset(); /* any other key ends the completion cycle */
+		if ((c == BACKSPACE || c == '\b') && len > 0) {
+			buf[--len] = '\0';
+			draw_prompt(prompt, buf);
 			continue;
 		}
 		if (c >= ' ' && c < 0x7f && len < bufsz - 1) {
 			buf[len++] = (char)c;
-			putchar(c);
-			fflush(stdout);
+			buf[len] = '\0';
+			draw_prompt(prompt, buf);
 		}
 	}
 	buf[len] = '\0';
@@ -1604,7 +1788,7 @@ read_cmd(void)
 	const char *arg;
 	const char *home;
 
-	read_str(":", cmd, sizeof(cmd), NULL);
+	read_str(":", cmd, sizeof(cmd), NULL, comp_path);
 	if (cmd[0] == '\0')
 		return;
 #ifdef USE_READLINE
