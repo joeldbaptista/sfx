@@ -35,7 +35,14 @@ Every entry is rendered in
 .Fl la
 format: mode string, hard link count, owner, group, size, modification
 time, and name.
-Hidden files are always listed.
+Hidden files, that is the files whose name starts with a dot, are listed
+while the hidden-file toggle is on; the
+.Ic H
+key switches that toggle, and
+.Pa \&.
+and
+.Pa ..
+are always listed.
 Entries are sorted with
 .Pa \&.
 first,
@@ -93,12 +100,36 @@ move up one full page
 re-read the terminal size and redraw
 .It Ic R
 force a full refresh
+.It Ic H
+show or hide the hidden files
 .It Ic q , Q , Ctrl-C
 quit
 .El
 .Pp
 Every movement key clears search dimming and clears the current status
 message, and keeps the search term itself.
+.Pp
+.Ic H
+toggles the display of the hidden files, so the first press hides them
+and the next press shows them again.
+The entries
+.Pa \&.
+and
+.Pa ..
+are never hidden.
+The toggle applies to the main listing and to the split-panel preview,
+and it applies to every tab.
+The directory is re-read, so the cursor stays on the same file name while
+that name is still listed; otherwise the cursor falls back to the nearest
+valid index.
+The status bar then reports
+.Ic hidden files shown
+or
+.Ic hidden files hidden .
+The state at start-up comes from
+.Dv SHOWHIDDEN
+in
+.Pa config.h .
 .Ss Search
 .Bl -tag -width "Ctrl-F, Page Down" -compact
 .It Ic /
@@ -340,6 +371,13 @@ the shell used for
 for
 .Ic \&:
 commands, and for the clipboard pipeline
+.It Dv SHOWHIDDEN
+whether the hidden files are listed when
+.Nm
+starts: 1 lists them and 0 hides them.
+The
+.Ic H
+key toggles the state at run time
 .It Dv CLIPBOARD
 the command that reads a path on standard input and copies it.
 It is absent from

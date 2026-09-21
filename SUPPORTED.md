@@ -95,8 +95,11 @@ entries. When the text is wider than the terminal, its left side is cut so
 that the tail remains visible.
 
 Entries are sorted with `.` first, `..` second, and the rest in byte-wise
-alphabetical order. Hidden files are always listed. At most 4096 entries
-per directory are read; entries beyond that limit are ignored.
+alphabetical order. Hidden files — the files whose name starts with `.` —
+are listed while the hidden-file toggle is on, and `H` switches that
+toggle; see section 5. The entries `.` and `..` are always listed. At most
+4096 entries per directory are read; entries beyond that limit are
+ignored.
 
 ---
 
@@ -134,6 +137,7 @@ This list is exhaustive.
 | `Ctrl-B`, `Page Up` | move up one full page |
 | `Ctrl-L` | re-read the terminal size and redraw |
 | `R` | force a full refresh (re-query size and redraw) |
+| `H` | show or hide the hidden files |
 | `q`, `Q`, `Ctrl-C` | quit |
 
 The canvas scrolls automatically to keep the selection visible. At the
@@ -142,6 +146,15 @@ directory, the cursor is placed on the directory you came from.
 
 Every movement key listed above clears search dimming and clears the
 current status message. The search term itself is kept.
+
+`H` toggles the display of the hidden files, so the first press hides them
+and the next press shows them again. The entries `.` and `..` are never
+hidden. The toggle applies to the main listing and to the split-panel
+preview, and it applies to every tab. The directory is re-read, so the
+cursor stays on the same file name when that name is still listed;
+otherwise the cursor falls back to the nearest valid index. The status bar
+then reports `hidden files shown` or `hidden files hidden`. The state at
+start-up comes from `SHOWHIDDEN` in `config.h`; see section 12.
 
 The terminal is restored on exit, on `SIGTERM`, and on `SIGINT`. A window
 resize (`SIGWINCH`) triggers an automatic redraw.
@@ -425,6 +438,13 @@ to apply changes. The complete set of settings follows.
 
 The shell used for `:sh`, for general `:` commands, and for the clipboard
 pipeline. Default: `"bash"`.
+
+### `SHOWHIDDEN`
+
+Whether the hidden files are listed when `sfx` starts: `1` lists them and
+`0` hides them. Default: `1`. The `H` key toggles the state at run time,
+and the toggle never changes the file. `sfx.c` supplies the default `1`
+when `config.h` does not define the macro.
 
 ### `CLIPBOARD`
 

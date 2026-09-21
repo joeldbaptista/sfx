@@ -81,12 +81,31 @@ open, the tab indicator `[current/total]` is prepended.
 | `Ctrl-B` / `Page Up`       | full page up                    |
 | `Ctrl-L`                   | redraw the screen               |
 | `R`                        | force a full refresh            |
+| `H`                        | show or hide the hidden files   |
 | `q` / `Q` / `Ctrl-C`       | quit                            |
 
 Entries are listed with `.` first, `..` second, then everything else
 in alphabetical order. When navigating up with `h`, the cursor lands on
 the directory you came from. Resizing the terminal redraws the screen
 automatically.
+
+---
+
+## Hidden files — `H`
+
+`sfx` lists the hidden files, that is the files whose name starts with a
+dot. Press `H` to hide them, and press `H` again to bring them back. The
+status bar confirms the new state with `hidden files hidden` or `hidden
+files shown`. The entries `.` and `..` stay visible either way, so you can
+always go up.
+
+The toggle covers the split panel as well, and it stays in effect while
+you move between directories and tabs. Toggling re-reads the directory and
+keeps the cursor on the same file, unless that file is one of the names
+just hidden.
+
+If you prefer to start with the hidden files out of the way, set
+`SHOWHIDDEN` to `0` in `config.h` and recompile.
 
 ---
 
@@ -372,6 +391,7 @@ Edit `config.h` and recompile (`make`) to change defaults.
 | Define      | Default                        | Description                                        |
 |-------------|--------------------------------|----------------------------------------------------|
 | `SHELL`     | `"bash"`                       | Shell used for `:sh` and status bar commands       |
+| `SHOWHIDDEN`| `1`                            | List the hidden files at start-up; `H` toggles it  |
 | `CLIPBOARD` | `"xclip -selection clipboard"` | Command that reads a path from stdin and copies it |
 | `openers[]` | `vi` for everything            | Which program opens which file                     |
 | `ttycmds[]` | editors, pagers, monitors      | Which `:` commands run full-screen instead of captured |

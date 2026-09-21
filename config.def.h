@@ -2,6 +2,8 @@
 
 #define SHELL "bash" /* shell for :sh and running commands */
 
+#define SHOWHIDDEN 1 /* 1 = list dot files at start; H toggles it */
+
 /*
  * File opener dispatch table.
  * ext: file extension (NULL = default for unmatched files)

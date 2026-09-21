@@ -46,6 +46,10 @@
 #define CLIPBOARD "xclip -selection clipboard"
 #endif
 
+#ifndef SHOWHIDDEN
+#define SHOWHIDDEN 1
+#endif
+
 #define MAXENT 4096
 #define MSGBUFSZ 512
 #define OUTBUFSZ 8192 /* captured output of a `:` command */
@@ -100,6 +104,7 @@ struct state {
 	int vanchor;	/* visual selection anchor index */
 	int pending_g;	/* waiting for second 'g' press */
 	int split;	/* split-panel mode */
+	int showdot;	/* 1 = list dot files */
 	Entry *pents;	/* preview panel entries */
 	int pnent;	/* preview entry count */
 	char ppath[PATH_MAX]; /* path currently loaded in pents */
@@ -123,6 +128,7 @@ static void fmt_size(off_t sz, char *buf, size_t bufsz);
 static void fmt_time(time_t t, char *buf, size_t bufsz);
 static void fmt_entry(Entry *e, char *buf, size_t bufsz);
 static int ent_cmp(const void *a, const void *b);
+static int listed(const char *name);
 static int load_dir(const char *path);
 static void reload_dir(void);
 static void nav_to(const char *path);
@@ -444,6 +450,23 @@ ent_cmp(const void *a, const void *b)
 	return strcmp(ea->name, eb->name);
 }
 
+/*
+ * Whether an entry belongs in a listing.
+ * Names starting with a dot are listed only while the hidden-file toggle
+ * is on; the two directory entries "." and ".." are always listed.
+ */
+static int
+listed(const char *name)
+{
+	if (name[0] != '.')
+		return 1;
+	if (name[1] == '\0')
+		return 1;
+	if (name[1] == '.' && name[2] == '\0')
+		return 1;
+	return g.showdot;
+}
+
 static int
 load_dir(const char *path)
 {
@@ -462,6 +485,8 @@ load_dir(const char *path)
 
 	n = 0;
 	while ((de = readdir(d)) && n < MAXENT) {
+		if (!listed(de->d_name))
+			continue;
 		e = &g.ents[n];
 		strncpy(e->name, de->d_name, NAME_MAX);
 		e->name[NAME_MAX] = '\0';
@@ -799,7 +824,11 @@ load_preview(void)
 
 	n = 0;
 	while ((de = readdir(d)) && n < MAXENT) {
-		Entry *pe = &g.pents[n];
+		Entry *pe;
+
+		if (!listed(de->d_name))
+			continue;
+		pe = &g.pents[n];
 		strncpy(pe->name, de->d_name, NAME_MAX);
 		pe->name[NAME_MAX] = '\0';
 		snprintf(full, sizeof(full), "%s/%s", path, de->d_name);
@@ -2117,6 +2146,7 @@ main(int argc, char *argv[])
 	}
 	for (i = 0; i < 26; i++)
 		g.marks[i] = -1;
+	g.showdot = SHOWHIDDEN;
 
 	signal(SIGWINCH, handle_sigwinch);
 	signal(SIGTERM, handle_exit);
@@ -2365,6 +2395,18 @@ main(int argc, char *argv[])
 
 		case 'x':
 			tab_close();
+			draw();
+			break;
+
+		case 'H':
+			g.showdot = !g.showdot;
+			g.visual = 0;
+			g.search_dim = 0;
+			reload_dir();
+			g.ppath[0] = '\0'; /* force preview reload */
+			snprintf(g.msg, sizeof(g.msg), "hidden files %s",
+				 g.showdot ? "shown" : "hidden");
+			g.have_msg = 1;
 			draw();
 			break;
 
