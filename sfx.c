@@ -2205,6 +2205,9 @@ main(int argc, char *argv[])
 
 		switch (c) {
 		case 'R':
+			reload_dir();
+			g.ppath[0] = '\0'; /* force preview reload */
+			fputs(ESC_ED, stdout); /* wipe stray output */
 			goto refresh;
 
 		case 3: /* Ctrl-C */ /* FALLTHROUGH */
