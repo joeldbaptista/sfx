@@ -50,11 +50,17 @@
 #define SHOWHIDDEN 1
 #endif
 
+#ifndef REFRESHMS
+#define REFRESHMS 500
+#endif
+
 #define MAXENT 4096
 #define MSGBUFSZ 512
 #define OUTBUFSZ 8192 /* captured output of a `:` command */
 #define MAXOUT 256    /* lines kept from that output */
 #define MAXCOMP 256   /* candidates kept per completion cycle */
+#define IDCACHE 256   /* slots in the uid/gid name caches */
+#define IDNAMELEN 32  /* a cached user or group name, truncated to fit */
 
 enum {
 	KEY_UP = 256,
@@ -84,6 +90,35 @@ struct entry {
 	struct stat st;
 };
 
+/*
+ * Widths of the listing columns, sized to the directory on screen so
+ * that a value too wide for its field cannot push the columns after
+ * it out of line.
+ */
+typedef struct cols Cols;
+struct cols {
+	int nlink;
+	int user;
+	int grp;
+	int size;
+	int time;
+};
+
+/*
+ * A directory's change stamp, taken when the directory is read and
+ * compared against a fresh one to detect changes made from outside
+ * sfx. Second-resolution mtime is paired with the size, the link
+ * count, and the inode, so that a change within the same second is
+ * still seen whenever it alters any of those.
+ */
+typedef struct stamp Stamp;
+struct stamp {
+	time_t sec;
+	off_t size;
+	nlink_t nlink;
+	ino_t ino;
+};
+
 typedef struct state State;
 struct state {
 	int rows, cols;
@@ -108,6 +143,9 @@ struct state {
 	Entry *pents;	/* preview panel entries */
 	int pnent;	/* preview entry count */
 	char ppath[PATH_MAX]; /* path currently loaded in pents */
+	Cols wid;	      /* listing column widths */
+	Stamp cwdst;	      /* change stamp of cwd when last read */
+	Stamp pst;	      /* change stamp of ppath when last read */
 	char out[OUTBUFSZ];   /* captured output of the last `:` command */
 	char *outl[MAXOUT];   /* line starts inside out */
 	int nout;	      /* lines captured; 0 = no output pane */
@@ -123,14 +161,22 @@ static void sigkeys(int on);
 static void reclaim_tty(void);
 static void query_dims(void);
 static int readkey(void);
+static int waitkey(int ms);
 static void fmt_mode(mode_t m, char *buf);
 static void fmt_size(off_t sz, char *buf, size_t bufsz);
 static void fmt_time(time_t t, char *buf, size_t bufsz);
+static const char *user_name(uid_t uid);
+static const char *group_name(gid_t gid);
+static void measure_cols(void);
 static void fmt_entry(Entry *e, char *buf, size_t bufsz);
 static int ent_cmp(const void *a, const void *b);
 static int listed(const char *name);
+static int stamp_of(const char *path, Stamp *s);
+static int stamp_eq(const Stamp *a, const Stamp *b);
+static int dir_stale(void);
 static int load_dir(const char *path);
 static void reload_dir(void);
+static void autorefresh(void);
 static void nav_to(const char *path);
 static void cursor_at(int row, int col);
 static void draw_entry(int row, int idx, Entry *e, int col_start,
@@ -290,7 +336,9 @@ readkey(void)
 	struct pollfd pfd;
 	ssize_t n;
 
-	n = read(STDIN_FILENO, buf, 1);
+	do {
+		n = read(STDIN_FILENO, buf, 1);
+	} while (n < 0 && errno == EINTR);
 	if (n <= 0)
 		return -1;
 	if (buf[0] != 0x1b)
@@ -326,6 +374,22 @@ readkey(void)
 		}
 	}
 	return 0x1b;
+}
+
+/*
+ * Wait for a keystroke for at most ms milliseconds, or indefinitely
+ * when ms is negative. Returns 1 when a keystroke is waiting and 0
+ * otherwise. An arriving signal counts as "nothing waiting", so that
+ * the caller gets a chance to act on it.
+ */
+static int
+waitkey(int ms)
+{
+	struct pollfd pfd;
+
+	pfd.fd = STDIN_FILENO;
+	pfd.events = POLLIN;
+	return poll(&pfd, 1, ms) > 0;
 }
 
 static void
@@ -401,37 +465,127 @@ fmt_time(time_t t, char *buf, size_t bufsz)
 		strftime(buf, bufsz, "%b %e %H:%M", tm);
 }
 
+/*
+ * Caches of user and group names, one slot per id taken modulo the
+ * slot count, a colliding id simply overwriting the slot it lands in.
+ * Resolving an id costs about 100 microseconds when the system has to
+ * be consulted, and sizing the columns consults every entry in the
+ * directory, so the lookups are worth keeping. A failed lookup is
+ * cached as the number, because a tree of files owned by absent ids is
+ * exactly the case that is slow without it.
+ */
+static struct idname {
+	unsigned long id;
+	int set;
+	char name[IDNAMELEN];
+} ucache[IDCACHE], gcache[IDCACHE];
+
+/*
+ * The name of a user id, or the id itself when it has no name. The
+ * returned string stays valid until the next call for an id landing in
+ * the same slot, which is long enough for one caller to use it.
+ */
+static const char *
+user_name(uid_t uid)
+{
+	struct idname *c;
+	struct passwd *pw;
+
+	c = &ucache[(unsigned long)uid % IDCACHE];
+	if (c->set && c->id == (unsigned long)uid)
+		return c->name;
+
+	pw = getpwuid(uid);
+	if (pw)
+		snprintf(c->name, sizeof(c->name), "%s", pw->pw_name);
+	else
+		snprintf(c->name, sizeof(c->name), "%lu", (unsigned long)uid);
+	c->id = (unsigned long)uid;
+	c->set = 1;
+	return c->name;
+}
+
+/* The name of a group id, cached as user_name() caches a user id. */
+static const char *
+group_name(gid_t gid)
+{
+	struct idname *c;
+	struct group *gr;
+
+	c = &gcache[(unsigned long)gid % IDCACHE];
+	if (c->set && c->id == (unsigned long)gid)
+		return c->name;
+
+	gr = getgrgid(gid);
+	if (gr)
+		snprintf(c->name, sizeof(c->name), "%s", gr->gr_name);
+	else
+		snprintf(c->name, sizeof(c->name), "%lu", (unsigned long)gid);
+	c->id = (unsigned long)gid;
+	c->set = 1;
+	return c->name;
+}
+
+/*
+ * Measure the listing columns against every entry in the directory.
+ * The floors are the widths a fixed-width listing used, so a directory
+ * whose values all fit is laid out exactly as before and only a wider
+ * value widens its column.
+ */
+static void
+measure_cols(void)
+{
+	char sz[24], ts[20], num[32];
+	Entry *e;
+	int i, n;
+
+	g.wid.nlink = 2;
+	g.wid.user = 8;
+	g.wid.grp = 8;
+	g.wid.size = 5;
+	g.wid.time = 12;
+
+	for (i = 0; i < g.nent; i++) {
+		e = &g.ents[i];
+
+		n = snprintf(num, sizeof(num), "%lu",
+			     (unsigned long)e->st.st_nlink);
+		if (n > g.wid.nlink)
+			g.wid.nlink = n;
+
+		n = (int)strlen(user_name(e->st.st_uid));
+		if (n > g.wid.user)
+			g.wid.user = n;
+
+		n = (int)strlen(group_name(e->st.st_gid));
+		if (n > g.wid.grp)
+			g.wid.grp = n;
+
+		fmt_size(e->st.st_size, sz, sizeof(sz));
+		n = (int)strlen(sz);
+		if (n > g.wid.size)
+			g.wid.size = n;
+
+		fmt_time(e->st.st_mtime, ts, sizeof(ts));
+		n = (int)strlen(ts);
+		if (n > g.wid.time)
+			g.wid.time = n;
+	}
+}
+
 static void
 fmt_entry(Entry *e, char *buf, size_t bufsz)
 {
 	char mode[12], sz[24], ts[20];
-	const char *user, *grp;
-	struct passwd *pw;
-	struct group *gr;
-	char ubuf[32], gbuf[32];
 
 	fmt_mode(e->st.st_mode, mode);
 	fmt_size(e->st.st_size, sz, sizeof(sz));
 	fmt_time(e->st.st_mtime, ts, sizeof(ts));
 
-	pw = getpwuid(e->st.st_uid);
-	if (pw) {
-		user = pw->pw_name;
-	} else {
-		snprintf(ubuf, sizeof(ubuf), "%u", (unsigned)e->st.st_uid);
-		user = ubuf;
-	}
-
-	gr = getgrgid(e->st.st_gid);
-	if (gr) {
-		grp = gr->gr_name;
-	} else {
-		snprintf(gbuf, sizeof(gbuf), "%u", (unsigned)e->st.st_gid);
-		grp = gbuf;
-	}
-
-	snprintf(buf, bufsz, "%s %2lu %-8s %-8s %5s %s %s", mode,
-		 (unsigned long)e->st.st_nlink, user, grp, sz, ts, e->name);
+	snprintf(buf, bufsz, "%s %*lu %-*s %-*s %*s %-*s %s", mode, g.wid.nlink,
+		 (unsigned long)e->st.st_nlink, g.wid.user,
+		 user_name(e->st.st_uid), g.wid.grp, group_name(e->st.st_gid),
+		 g.wid.size, sz, g.wid.time, ts, e->name);
 }
 
 static int
@@ -467,6 +621,53 @@ listed(const char *name)
 	return g.showdot;
 }
 
+/*
+ * Take the change stamp of the directory at path. Returns -1 when the
+ * directory cannot be stat'ed, and zeroes the stamp in that case.
+ */
+static int
+stamp_of(const char *path, Stamp *s)
+{
+	struct stat st;
+
+	if (stat(path, &st) < 0) {
+		memset(s, 0, sizeof(*s));
+		return -1;
+	}
+	s->sec = st.st_mtime;
+	s->size = st.st_size;
+	s->nlink = st.st_nlink;
+	s->ino = st.st_ino;
+	return 0;
+}
+
+static int
+stamp_eq(const Stamp *a, const Stamp *b)
+{
+	return a->sec == b->sec && a->size == b->size && a->nlink == b->nlink &&
+	       a->ino == b->ino;
+}
+
+/*
+ * Whether a directory shown on screen has changed since it was read:
+ * the current directory always, and the previewed directory as well
+ * while the split panel is up. A directory that cannot be stat'ed is
+ * reported unchanged, so that a directory which has been removed does
+ * not provoke a reload on every check.
+ */
+static int
+dir_stale(void)
+{
+	Stamp s;
+
+	if (stamp_of(g.cwd, &s) == 0 && !stamp_eq(&s, &g.cwdst))
+		return 1;
+	if (g.split && g.ppath[0] && stamp_of(g.ppath, &s) == 0 &&
+	    !stamp_eq(&s, &g.pst))
+		return 1;
+	return 0;
+}
+
 static int
 load_dir(const char *path)
 {
@@ -475,6 +676,10 @@ load_dir(const char *path)
 	Entry *e;
 	char full[PATH_MAX];
 	int n;
+
+	/* stamped before the read, so that a change made during the
+	 * read is seen by the next check rather than lost */
+	stamp_of(path, &g.cwdst);
 
 	d = opendir(path);
 	if (!d) {
@@ -499,6 +704,7 @@ load_dir(const char *path)
 
 	g.nent = n;
 	qsort(g.ents, g.nent, sizeof(*g.ents), ent_cmp);
+	measure_cols();
 	return 0;
 }
 
@@ -531,6 +737,19 @@ reload_dir(void)
 	}
 	if (g.sel >= g.nent)
 		g.sel = g.nent > 0 ? g.nent - 1 : 0;
+}
+
+/*
+ * Re-read what has changed on disk and repaint. The preview cache is
+ * dropped as well, because the previewed directory may have changed
+ * too. Called from the main loop while sfx sits idle.
+ */
+static void
+autorefresh(void)
+{
+	reload_dir();
+	g.ppath[0] = '\0';
+	draw();
 }
 
 static void
@@ -813,6 +1032,8 @@ load_preview(void)
 	snprintf(path, sizeof(path), "%s/%s", g.cwd, e->name);
 	if (strcmp(path, g.ppath) == 0)
 		return; /* already loaded */
+
+	stamp_of(path, &g.pst);
 
 	d = opendir(path);
 	if (!d) {
@@ -2130,6 +2351,7 @@ int
 main(int argc, char *argv[])
 {
 	const char *start;
+	struct sigaction sa;
 	int c, half, full, i;
 
 	if (argc > 2) {
@@ -2147,8 +2369,20 @@ main(int argc, char *argv[])
 	for (i = 0; i < 26; i++)
 		g.marks[i] = -1;
 	g.showdot = SHOWHIDDEN;
+	measure_cols(); /* column floors, in case the first load fails */
 
-	signal(SIGWINCH, handle_sigwinch);
+	/*
+	 * No SA_RESTART for the window-size signal, so that it cuts the
+	 * idle poll() short and a resize is answered at once. The reads
+	 * in readkey() retry on EINTR themselves, so a prompt that is
+	 * open at the time is not disturbed.
+	 */
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handle_sigwinch;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sigaction(SIGWINCH, &sa, NULL);
+
 	signal(SIGTERM, handle_exit);
 	signal(SIGINT, handle_exit);
 	signal(SIGPIPE, SIG_IGN);
@@ -2168,6 +2402,18 @@ main(int argc, char *argv[])
 			resize_pending = 0;
 			query_dims();
 			draw();
+		}
+
+		/*
+		 * Idle until a key arrives, re-reading the listing when
+		 * a watched directory has changed meanwhile. A visual
+		 * selection suspends the check, because its endpoints
+		 * are entry positions and a reload would move them.
+		 */
+		if (!waitkey(REFRESHMS > 0 ? REFRESHMS : -1)) {
+			if (!g.visual && dir_stale())
+				autorefresh();
+			continue;
 		}
 
 		c = readkey();

@@ -35,6 +35,26 @@ Every entry is rendered in
 .Fl la
 format: mode string, hard link count, owner, group, size, modification
 time, and name.
+Every column but the name is padded to the width of the widest value in
+the directory, so a value too wide for its column cannot push the
+columns after it out of line.
+.Pp
+While
+.Nm
+waits for a key it checks every
+.Dv REFRESHMS
+milliseconds whether the directory on screen has changed, and whether
+the previewed directory has changed as well while the split panel is up.
+A directory whose modification time, size, link count or inode has moved
+since it was read is re-read and the screen is repainted, so a file
+created, removed or renamed from another terminal appears without a key
+being pressed.
+The cursor keeps its file name across the re-read.
+The check is suspended while a visual selection is active, because the
+endpoints of that selection are entry positions and re-reading would
+move them.
+.Ic R
+re-reads on demand at any time.
 Hidden files, that is the files whose name starts with a dot, are listed
 while the hidden-file toggle is on; the
 .Ic H
@@ -378,6 +398,12 @@ starts: 1 lists them and 0 hides them.
 The
 .Ic H
 key toggles the state at run time
+.It Dv REFRESHMS
+how often, in milliseconds, the directory on screen is checked for
+changes made from outside while
+.Nm
+is idle.
+The compiled-in default is 500, and 0 switches the check off
 .It Dv CLIPBOARD
 the command that reads a path on standard input and copies it.
 It is absent from
@@ -461,3 +487,16 @@ as several columns when a line is truncated.
 At most 4096 entries are read per directory, at most 256 lines and 8192
 bytes are kept from the output of a captured command, and status
 messages are truncated to 512 bytes.
+Owner and group names are truncated to 31 bytes.
+.Pp
+The automatic re-read notices that a directory has changed, not that a
+file inside it has changed, so a file whose size or timestamp moves while
+its name stays put keeps its old size and timestamp on screen until the
+directory is re-read for another reason.
+A change leaving a directory's modification time, size, link count and
+inode all unchanged is not noticed either; adding a file and removing it
+again within the same second is the case this covers.
+A directory that cannot be stat'ed, having been removed for instance, is
+reported as unchanged, so the listing of a directory that disappears
+stays on screen until
+.Ic R .

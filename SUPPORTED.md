@@ -76,8 +76,13 @@ status bar.
 
 Each entry is rendered in `ls -la` format with these columns, in order:
 mode string, hard link count, owner name, group name, size, modification
-time, and file name. The owner and group fall back to the numeric uid and
-gid when no passwd or group record exists. Sizes are printed in binary
+time, and file name. Every column except the file name is padded to the
+width of the widest value in the directory, so that one long value cannot
+push the columns after it out of line; the minimum widths are 2 for the
+link count, 8 for the owner, 8 for the group, 5 for the size, and 12 for
+the timestamp. So a directory whose values all fit those widths is laid
+out exactly as a fixed-width listing. The owner and group fall back to
+the numeric uid and gid when no passwd or group record exists. Sizes are printed in binary
 units (`K`, `M`, `G`) with one decimal, or as a plain byte count below 1K.
 Timestamps older than about six months, and timestamps in the future, are
 printed as `Mon DD  YYYY`; every other timestamp is printed as
@@ -93,6 +98,10 @@ The status bar shows one of the following, in this order of precedence:
 `k` is the 1-based index of the selection and `total` is the number of
 entries. When the text is wider than the terminal, its left side is cut so
 that the tail remains visible.
+
+The listing is re-read automatically while `sfx` is idle, so a change
+made from outside — by another terminal or by a background process —
+appears without a key being pressed; see section 5.
 
 Entries are sorted with `.` first, `..` second, and the rest in byte-wise
 alphabetical order. Hidden files — the files whose name starts with `.` —
@@ -156,8 +165,22 @@ otherwise the cursor falls back to the nearest valid index. The status bar
 then reports `hidden files shown` or `hidden files hidden`. The state at
 start-up comes from `SHOWHIDDEN` in `config.h`; see section 12.
 
+While `sfx` sits waiting for a key it checks every `REFRESHMS`
+milliseconds whether the current directory has changed, and whether the
+previewed directory has changed as well while the split panel is up. A
+directory whose modification time, size, link count or inode has moved
+since it was read is re-read and the screen is repainted, so a file
+created, removed or renamed from another terminal appears without a key
+being pressed. The cursor keeps its file name across the re-read. The
+check costs one `stat` call per directory watched, it emits nothing when
+nothing has changed, and `REFRESHMS` set to `0` switches it off; see
+section 12. The re-read is suspended while a visual selection is active,
+because the endpoints of that selection are entry positions and
+re-reading would move them. `R` re-reads on demand at any time.
+
 The terminal is restored on exit, on `SIGTERM`, and on `SIGINT`. A window
-resize (`SIGWINCH`) triggers an automatic redraw.
+resize (`SIGWINCH`) triggers an automatic redraw, and the resize is acted
+on at once rather than waiting for the next key.
 
 ---
 
@@ -446,6 +469,13 @@ Whether the hidden files are listed when `sfx` starts: `1` lists them and
 and the toggle never changes the file. `sfx.c` supplies the default `1`
 when `config.h` does not define the macro.
 
+### `REFRESHMS`
+
+How often, in milliseconds, `sfx` checks whether a directory on screen
+has changed, while it is idle. Default: `500`. `0` switches the check off,
+leaving `R` as the only way to re-read a directory. `sfx.c` supplies the
+default `500` when `config.h` does not define the macro.
+
 ### `CLIPBOARD`
 
 The command that reads a path on standard input and copies it. It is not
@@ -532,6 +562,20 @@ program.
   and the command name shown in the status line to 63 bytes.
 - Output is byte-oriented, so multi-byte characters in file names are
   counted as several columns when a line is truncated.
+- Owner and group names are truncated to 31 bytes.
+- The automatic re-read notices that a directory has changed, not that a
+  file inside it has changed. So a file whose size or timestamp changes
+  while its name stays put keeps its old size and timestamp on screen
+  until the directory is re-read for another reason, or until `R`.
+- A change that leaves a directory's modification time, size, link count
+  and inode all unchanged is not noticed. Adding a file and removing it
+  again within the same second is the case this covers.
+- A directory that cannot be stat'ed, having been removed for instance, is
+  reported as unchanged, so the listing of a directory that disappears
+  stays on screen until `R`.
+- The automatic re-read is suspended while a visual selection is active,
+  because the endpoints of the selection are entry positions and
+  re-reading would move them.
 
 ---
 

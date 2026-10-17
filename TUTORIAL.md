@@ -57,7 +57,9 @@ Without an argument, `sfx` opens the current working directory.
 ```
 
 The **canvas** lists the contents of the current directory in `ls -la`
-format. The selected entry is highlighted. The **status bar** shows the
+format. Each column is as wide as the widest value in the directory, so
+a long link count or a long owner name widens its own column instead of
+pushing the later columns out of line. The selected entry is highlighted. The **status bar** shows the
 position in the list (`k/total`) followed by the current directory path,
 or an error message when something goes wrong. With more than one tab
 open, the tab indicator `[current/total]` is prepended.
@@ -88,6 +90,16 @@ Entries are listed with `.` first, `..` second, then everything else
 in alphabetical order. When navigating up with `h`, the cursor lands on
 the directory you came from. Resizing the terminal redraws the screen
 automatically.
+
+The listing keeps itself up to date. Twice a second, while `sfx` waits
+for a key, it checks whether the directory on screen has changed, and
+whether the previewed directory has changed too while the split panel is
+up. So a file you create, delete or rename in another terminal shows up
+on its own, and the cursor stays on the file it was on. The check stops
+while a visual selection is active, so that the selection cannot shift
+under you; leaving the selection lets it resume. `R` re-reads whenever
+you want it to, and `REFRESHMS` in `config.h` changes the interval or
+switches the check off.
 
 ---
 
@@ -392,6 +404,7 @@ Edit `config.h` and recompile (`make`) to change defaults.
 |-------------|--------------------------------|----------------------------------------------------|
 | `SHELL`     | `"bash"`                       | Shell used for `:sh` and status bar commands       |
 | `SHOWHIDDEN`| `1`                            | List the hidden files at start-up; `H` toggles it  |
+| `REFRESHMS` | `500`                          | Milliseconds between checks for outside changes; `0` disables |
 | `CLIPBOARD` | `"xclip -selection clipboard"` | Command that reads a path from stdin and copies it |
 | `openers[]` | `vi` for everything            | Which program opens which file                     |
 | `ttycmds[]` | editors, pagers, monitors      | Which `:` commands run full-screen instead of captured |

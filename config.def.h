@@ -4,6 +4,8 @@
 
 #define SHOWHIDDEN 1 /* 1 = list dot files at start; H toggles it */
 
+#define REFRESHMS 500 /* ms between checks for outside changes; 0 = off */
+
 /*
  * File opener dispatch table.
  * ext: file extension (NULL = default for unmatched files)
