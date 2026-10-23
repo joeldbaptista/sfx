@@ -2,6 +2,15 @@
 
 #define SHELL "bash" /* shell for :sh and running commands */
 
+/*
+ * Command that reads a path on standard input and puts it on the
+ * clipboard, used by the `y` key. Use the one your system provides:
+ *   macOS    pbcopy
+ *   X11      xclip -selection clipboard
+ *   Wayland  wl-copy
+ */
+#define CLIPBOARD "pbcopy"
+
 #define SHOWHIDDEN 1 /* 1 = list dot files at start; H toggles it */
 
 #define REFRESHMS 500 /* ms between checks for outside changes; 0 = off */

@@ -43,7 +43,11 @@
 #define BACKSPACE 0x7f
 
 #ifndef CLIPBOARD
+#ifdef __APPLE__
+#define CLIPBOARD "pbcopy"
+#else
 #define CLIPBOARD "xclip -selection clipboard"
+#endif
 #endif
 
 #ifndef SHOWHIDDEN
@@ -689,9 +693,16 @@ load_dir(const char *path)
 	}
 
 	n = 0;
-	while ((de = readdir(d)) && n < MAXENT) {
+	while ((de = readdir(d))) {
 		if (!listed(de->d_name))
 			continue;
+		if (n >= MAXENT) {
+			snprintf(g.msg, sizeof(g.msg),
+				 "%s: over %d entries, listing truncated", path,
+				 MAXENT);
+			g.have_msg = 1;
+			break;
+		}
 		e = &g.ents[n];
 		strncpy(e->name, de->d_name, NAME_MAX);
 		e->name[NAME_MAX] = '\0';
@@ -719,8 +730,8 @@ reload_dir(void)
 	int i;
 
 	if (g.nent > 0 && g.sel >= 0 && g.sel < g.nent) {
-		strncpy(name, g.ents[g.sel].name, NAME_MAX - 1);
-		name[NAME_MAX - 1] = '\0';
+		strncpy(name, g.ents[g.sel].name, NAME_MAX);
+		name[NAME_MAX] = '\0';
 	} else {
 		name[0] = '\0';
 	}
@@ -770,11 +781,27 @@ nav_to(const char *path)
 		g.have_msg = 1;
 		return;
 	}
-	if (load_dir(resolved) < 0)
-		return;
+
+	/*
+	 * Cleared before the directory is read, so that a message from
+	 * load_dir(), such as the one for a truncated listing, survives.
+	 */
+	g.have_msg = 0;
+
+	/*
+	 * The working directory is changed before the read, so that a
+	 * failure of either step leaves the working directory and the
+	 * listing agreeing with each other.
+	 */
 	if (chdir(resolved) < 0) {
 		snprintf(g.msg, sizeof(g.msg), "chdir: %s", strerror(errno));
 		g.have_msg = 1;
+		return;
+	}
+	if (load_dir(resolved) < 0) {
+		/* the listing is unusable, so go back to where we were */
+		if (g.cwd[0] && chdir(g.cwd) == 0)
+			load_dir(g.cwd);
 		return;
 	}
 
@@ -782,7 +809,6 @@ nav_to(const char *path)
 	g.cwd[PATH_MAX - 1] = '\0';
 	g.sel = 0;
 	g.top = 0;
-	g.have_msg = 0;
 	g.visual = 0;
 	clear_out();	   /* the output belongs to the directory we left */
 	g.ppath[0] = '\0'; /* invalidate preview cache */
@@ -1020,8 +1046,11 @@ load_preview(void)
 	char path[PATH_MAX], full[PATH_MAX];
 	int n;
 
-	if (g.nent == 0)
+	if (g.nent == 0) {
+		g.pnent = 0;
+		g.ppath[0] = '\0';
 		return;
+	}
 	e = &g.ents[g.sel];
 	if (!S_ISDIR(e->st.st_mode)) {
 		g.pnent = 0;
@@ -2101,6 +2130,7 @@ search_jump(int dir)
 static void
 read_search(void)
 {
+	char buf[NAME_MAX + 1];
 	int len, c;
 
 	cursor_at(g.rows, 1);
@@ -2113,7 +2143,7 @@ read_search(void)
 		if (c == '\r' || c == '\n')
 			break;
 		if (c == 0x1b || c < 0)
-			return;
+			return; /* aborted: the previous search is kept */
 		if ((c == 0x7f || c == '\b') && len > 0) {
 			len--;
 			fputs("\b \b", stdout);
@@ -2121,14 +2151,15 @@ read_search(void)
 			continue;
 		}
 		if (c >= ' ' && c < 0x7f && len < NAME_MAX) {
-			g.search[len++] = (char)c;
+			buf[len++] = (char)c;
 			putchar(c);
 			fflush(stdout);
 		}
 	}
-	g.search[len] = '\0';
+	buf[len] = '\0';
 	if (len == 0)
 		return;
+	memcpy(g.search, buf, (size_t)len + 1);
 	g.have_search = 1;
 	g.search_dim = 1;
 	search_jump(1);
