@@ -1387,6 +1387,7 @@ spawn_shell(void)
 	}
 	if (pid == 0) {
 		signal(SIGINT, SIG_DFL);
+		setenv("SFX", "1", 1);
 		args[0] = SHELL;
 		args[1] = NULL;
 		execvp(SHELL, args);
