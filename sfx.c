@@ -24,6 +24,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #define ESC "\033"
 #define ESC_CUP ESC "[%d;%dH" /* cursor position (1-based) */
@@ -230,6 +231,7 @@ static void bookmark_jump(int idx);
 static void cleanup(void);
 static void handle_exit(int sig);
 static void handle_sigwinch(int sig);
+static char *rtrim(char *s);
 
 static State g;
 static volatile sig_atomic_t resize_pending;
@@ -2060,9 +2062,20 @@ read_str(const char *prompt, char *buf, int bufsz, const char *prefill,
 #endif
 }
 
+static
+char *rtrim(char *s)
+{
+    char *back = s + strlen(s);
+
+    while(isspace(*--back));
+    *(back+1) = '\0';
+    return s;
+}
+
 static void
 read_cmd(void)
 {
+	char *s;
 	char cmd[512];
 	char path[PATH_MAX];
 	const char *arg;
@@ -2074,16 +2087,18 @@ read_cmd(void)
 #ifdef USE_READLINE
 	add_history(cmd);
 #endif
+	s = rtrim(cmd);
 
-	if (strcmp(cmd, "cd") == 0) {
+	/* trim command */
+	if (strcmp(s, "cd") == 0) {
 		/* bare :cd — go home */
 		home = getenv("HOME");
 		nav_to(home ? home : "/");
 		return;
 	}
 
-	if (strncmp(cmd, "cd ", 3) == 0) {
-		arg = cmd + 3;
+	if (strncmp(s, "cd ", 3) == 0) {
+		arg = s + 3;
 		while (*arg == ' ')
 			arg++;
 		if (arg[0] == '~' && (arg[1] == '/' || arg[1] == '\0')) {
@@ -2101,14 +2116,14 @@ read_cmd(void)
 	}
 
 	/* quit application */
-	if (strncmp(cmd, "q", 1) == 0 || strncmp(cmd, "Q", 1) == 0) {
+	if (strncmp(s, "q", 1) == 0 || strncmp(s, "Q", 1) == 0) {
 		cleanup();
 		free(g.ents);
 		free(g.pents);
 		exit(0);
 	}
 
-	if (strcmp(cmd, "sh") == 0)
+	if (strcmp(s, "sh") == 0)
 		spawn_shell();
 	else if (needstty(cmd))
 		run_tty(cmd);
