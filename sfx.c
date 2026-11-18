@@ -2100,6 +2100,14 @@ read_cmd(void)
 		return;
 	}
 
+	/* quit application */
+	if (strncmp(cmd, "q", 1) == 0 || strncmp(cmd, "Q", 1) == 0) {
+		cleanup();
+		free(g.ents);
+		free(g.pents);
+		exit(0);
+	}
+
 	if (strcmp(cmd, "sh") == 0)
 		spawn_shell();
 	else if (needstty(cmd))
@@ -2488,9 +2496,7 @@ main(int argc, char *argv[])
 			fputs(ESC_ED, stdout); /* wipe stray output */
 			goto refresh;
 
-		case 3: /* Ctrl-C */ /* FALLTHROUGH */
-		case 'q':	     /* FALLTHROUGH */
-		case 'Q':
+		case 3: /* Ctrl-C */
 			cleanup();
 			free(g.ents);
 			free(g.pents);
